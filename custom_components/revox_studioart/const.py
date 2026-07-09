@@ -40,6 +40,7 @@ SOURCE_IDS: dict[str, int] = {
 }
 SOURCE_ID_TO_NAME: dict[int, str] = {v: k for k, v in SOURCE_IDS.items()}
 SOURCE_ID_TO_NAME[1] = "AirPlay"
+SOURCE_ID_TO_NAME[4] = "Spotify"  # activates via Spotify Connect, display-only
 
 SOURCE_COMMANDS: dict[str, str] = {
     "Preset 1": "source preset 0",

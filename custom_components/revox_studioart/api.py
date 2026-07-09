@@ -125,8 +125,13 @@ POWER_ACTION_RESTART = 2
 # Event channel opcodes
 _EV_HANDSHAKE = 0x03
 _EV_SOURCE_A = 0x0A  # push: ASCII source id, e.g. "19"
+_EV_PLAYVIEW_A = 0x2A  # push: "PlayView" JSON with now-playing metadata
+_EV_PLAYVIEW_B = 0x2D  # push: duplicate of 0x2A
+_EV_POSITION = 0x31  # push: ASCII playback position in ms, ~1/s while playing
 _EV_SOURCE_B = 0x32  # push: ASCII source id (sent alongside 0x0A)
-_EV_PLAY_STATE = 0x33  # push: ASCII play state (0 stopped, 1 playing, 2 paused)
+# NB: the push enum differs from the playback JSON: 0 = playing/active
+# (sent together with SPEAKER_ACTIVE on play), 2 = paused.
+_EV_PLAY_STATE = 0x33
 _EV_VOLUME = 0x40  # query; also pushed with the ASCII volume on changes
 _EV_SPEAKER_ACTIVE = 0x46  # push: "SPEAKER_ACTIVE,<source id>"
 _EV_CHANNEL_STATUS = 0x67
@@ -166,9 +171,19 @@ class RevoxState:
     brightness: int | None = None
     auto_power_on: bool | None = None
     power_on_source: int | None = None
-    # playback (cmd 0x3D)
+    # playback (cmd 0x3D / event pushes). Canonical play_state:
+    # 0 = idle/stopped, 1 = playing, 2 = paused (paused only exists in
+    # pushes — the playback JSON reports 0 for it).
     source: int | None = None
     play_state: int | None = None
+    # now-playing metadata (playback JSON + "PlayView" pushes 0x2A/0x2D)
+    media_title: str | None = None
+    media_artist: str | None = None
+    media_album: str | None = None
+    media_image_url: str | None = None
+    media_duration_ms: int | None = None
+    media_position_ms: int | None = None
+    media_position_ts: float | None = None  # epoch seconds of the position
     # settings toggles
     aux_trigger: bool | None = None
     aux_high_sensitivity: bool | None = None
@@ -241,10 +256,12 @@ class RevoxStudioArtClient:
         # values that only ever arrive as pushes (0x67 channel status); they
         # must survive polls, which would otherwise reset them to None
         self._push_cache: dict[str, Any] = {}
-        # last play-state push (value, monotonic timestamp): the playback
-        # JSON lags a second or two behind the 0x33 pushes, so a poll right
-        # after a push would report the *old* state and flap the UI
+        # last play-state push (canonical value, monotonic timestamp): the
+        # playback JSON lags a second or two behind the pushes, so a poll
+        # right after a push would report the *old* state and flap the UI
         self._play_state_push: tuple[int, float] | None = None
+        # last position push (ms, epoch seconds)
+        self._media_position: tuple[int, float] | None = None
 
     @property
     def host(self) -> str:
@@ -361,6 +378,8 @@ class RevoxStudioArtClient:
         st.power_on_source = dev.get("PowerOnSrc")
         st.source = play.get("source")
         st.play_state = play.get("state")
+        st.media_title = play.get("title") or None
+        st.media_image_url = play.get("albumUrl") or None
         st.loudness = self._toggle_cache.get("loudness")
         st.aux_high_sensitivity = self._toggle_cache.get("aux_high_sensitivity")
         st.lr_reverse = _as_bool(multi.get("LRreverse"))
@@ -372,18 +391,28 @@ class RevoxStudioArtClient:
         # Aux-In trigger is the inverse of "DisAutoAux" (verified on device)
         if st.dis_auto_aux is not None:
             st.aux_trigger = not st.dis_auto_aux
-        # channel/pair state only arrive via 0x67 pushes — carry them over
+        # values that only arrive via pushes — carry them over polls
         st.channel = self._push_cache.get("channel")
         st.pair_state = self._push_cache.get("pair_state")
+        st.media_artist = self._push_cache.get("media_artist")
+        st.media_album = self._push_cache.get("media_album")
+        st.media_duration_ms = self._push_cache.get("media_duration_ms")
+        if self._media_position is not None:
+            st.media_position_ms, st.media_position_ts = self._media_position
         # A fresh play-state push outranks the (lagging) playback JSON.
-        # Asymmetric window: on *pause* the JSON lags a couple of seconds
-        # behind the push, but on *play start* the speaker pushes a stale
-        # "stopped" and never pushes "playing" (the JSON leads there), so
-        # only a paused push may pin the state for long.
         if self._play_state_push is not None:
             value, when = self._play_state_push
-            window = 3.0 if value == 2 else 1.5
-            if time.monotonic() - when < window:
+            age = time.monotonic() - when
+            if value == 2:
+                # "paused" exists only in pushes: the JSON reports 0 for it
+                # (and right after the push briefly still reports 1). Hold
+                # paused unless the JSON shows real playback again or the
+                # push grows old.
+                if st.play_state == 1 and age < 3.0:
+                    st.play_state = 2
+                elif st.play_state != 1 and age < 30.0:
+                    st.play_state = 2
+            elif age < 1.5:
                 st.play_state = value
         return st
 
@@ -650,7 +679,13 @@ class RevoxStudioArtClient:
             if key in partial:
                 self._toggle_cache[key] = partial[key]
         # remember push-only values so the next poll does not lose them
-        for key in ("channel", "pair_state"):
+        for key in (
+            "channel",
+            "pair_state",
+            "media_artist",
+            "media_album",
+            "media_duration_ms",
+        ):
             if key in partial:
                 self._push_cache[key] = partial[key]
         if "play_state" in partial:
@@ -672,7 +707,24 @@ class RevoxStudioArtClient:
         if op in (_EV_SOURCE_A, _EV_SOURCE_B) and text.isdigit():
             return {"source": int(text), "_activity": True}
         if op == _EV_PLAY_STATE and text.isdigit():
-            return {"play_state": int(text), "_activity": True}
+            # push enum: 0 = playing/active, 2 = paused (differs from JSON!)
+            value = int(text)
+            if value == 2:
+                return {"play_state": 2, "_activity": True}
+            if value == 0:
+                return {"play_state": 1, "_activity": True}
+            return {"_activity": True}
+        if op in (_EV_PLAYVIEW_A, _EV_PLAYVIEW_B):
+            return self._parse_playview(payload)
+        if op == _EV_POSITION and text.isdigit():
+            # position ticks ~1/s while playing: cache them (no state write
+            # per tick) and use the first one as an instant playing signal
+            self._media_position = (int(text), time.time())
+            previous = self._play_state_push
+            self._play_state_push = (1, time.monotonic())
+            if previous is None or previous[0] != 1:
+                return {"play_state": 1, "_activity": True}
+            return {}
         if op in (_EV_SAMPLE_RATE, _EV_STREAM_START):
             return {"_activity": True}
         if op == _EV_SPEAKER_ACTIVE and "," in text:
@@ -696,6 +748,39 @@ class RevoxStudioArtClient:
             data = body[3:]
             return self._parse_mirrored_set(group, cmd, data)
         return {}
+
+    @staticmethod
+    def _parse_playview(payload: bytes) -> dict[str, Any]:
+        """Parse a "PlayView" push (now-playing metadata JSON)."""
+        try:
+            data = json.loads(payload.decode("utf-8", "replace"))
+        except json.JSONDecodeError:
+            return {"_activity": True}
+        contents = data.get("Window CONTENTS")
+        if not isinstance(contents, dict):
+            return {"_activity": True}
+        partial: dict[str, Any] = {"_activity": True}
+        if "TrackName" in contents:
+            partial["media_title"] = contents["TrackName"] or None
+        if "Artist" in contents:
+            partial["media_artist"] = contents["Artist"] or None
+        if "Album" in contents:
+            partial["media_album"] = contents["Album"] or None
+        if "CoverArtUrl" in contents:
+            partial["media_image_url"] = contents["CoverArtUrl"] or None
+        total = contents.get("TotalTime")
+        if isinstance(total, int) and total > 0:
+            partial["media_duration_ms"] = total
+        source = contents.get("Current Source")
+        if isinstance(source, int):
+            partial["source"] = source
+        # PlayState uses the push enum: 0 = playing, 2 = paused
+        play_state = contents.get("PlayState")
+        if play_state == 2:
+            partial["play_state"] = 2
+        elif play_state == 0:
+            partial["play_state"] = 1
+        return partial
 
     @staticmethod
     def _parse_mirrored_set(group: int, cmd: int, data: bytes) -> dict[str, Any]:

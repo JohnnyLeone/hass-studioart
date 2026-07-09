@@ -15,6 +15,7 @@ from homeassistant.components.media_player import (
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
+from homeassistant.util import dt as dt_util
 
 from .const import DOMAIN, SOURCE_COMMANDS, SOURCE_ID_TO_NAME, SOURCE_IDS
 from .coordinator import RevoxCoordinator
@@ -100,6 +101,58 @@ class RevoxMediaPlayer(RevoxEntity, MediaPlayerEntity):
         if st is not None and st.source in SOURCE_ID_TO_NAME:
             return SOURCE_ID_TO_NAME[st.source]
         return self._last_source
+
+    # -- now-playing metadata (playback JSON + PlayView pushes) -------------
+    @property
+    def media_content_type(self) -> MediaType | None:
+        st = self.coordinator.data
+        return MediaType.MUSIC if st and st.media_title else None
+
+    @property
+    def media_title(self) -> str | None:
+        st = self.coordinator.data
+        return st.media_title if st else None
+
+    @property
+    def media_artist(self) -> str | None:
+        st = self.coordinator.data
+        return st.media_artist if st and st.media_title else None
+
+    @property
+    def media_album_name(self) -> str | None:
+        st = self.coordinator.data
+        return st.media_album if st and st.media_title else None
+
+    @property
+    def media_image_url(self) -> str | None:
+        st = self.coordinator.data
+        return st.media_image_url if st and st.media_title else None
+
+    @property
+    def media_duration(self) -> int | None:
+        st = self.coordinator.data
+        if st is None or not st.media_title or st.media_duration_ms is None:
+            return None
+        return round(st.media_duration_ms / 1000)
+
+    @property
+    def media_position(self) -> int | None:
+        st = self.coordinator.data
+        if (
+            st is None
+            or not st.media_title
+            or st.media_position_ms is None
+            or self.state not in (MediaPlayerState.PLAYING, MediaPlayerState.PAUSED)
+        ):
+            return None
+        return round(st.media_position_ms / 1000)
+
+    @property
+    def media_position_updated_at(self):
+        st = self.coordinator.data
+        if st is None or st.media_position_ts is None or self.media_position is None:
+            return None
+        return dt_util.utc_from_timestamp(st.media_position_ts)
 
     @property
     def extra_state_attributes(self) -> dict:

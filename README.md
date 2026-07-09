@@ -19,7 +19,7 @@ within a second via the speaker's push channel.
 
 | Entity | Function | Backing command | Confidence |
 |---|---|---|---|
-| `media_player` | Volume, mute, source, play/pause, play URL | binary + ASCII `cmd …` commands, status reads and pushes | High |
+| `media_player` | Volume, mute, source, play/pause, play URL, now-playing metadata (track/artist/album/cover/position) | binary + ASCII `cmd …` commands, status reads and pushes | High |
 | `switch` Aux-In trigger | Auto-switch to Aux when analog signal present | binary set `0x9E` **inverted** ("disable auto aux"), state = Kleernet `DisAutoAux` | **Verified on a live speaker** |
 | `switch` Aux-In trigger high sensitivity | Boosts the analog input signal | binary get `0x41` / set `0x43` | **Verified on a live speaker** |
 | `switch` Loudness | Bass lift at low volume | binary get `0x34` / set `0x36` | **Verified on a live speaker** |
@@ -59,13 +59,13 @@ UTF-8 JSON object.
 
 | Group | Get | Reply | Set | Meaning | Payload / notes |
 |---|---|---|---|---|---|
-| 2 | — | — | `0x03` | **Select source** ✓ | numeric id, device-verified: `19` = Bluetooth, `25` = Analog IN. Id `1` = an active **AirPlay** session — AirPlay cannot be selected, it activates itself when a client connects (and its tile disappears from the app when another source is active). Not to be confused with the *group 3* `0x03` multi-room get |
+| 2 | — | — | `0x03` | **Select source** ✓ | numeric id, device-verified: `19` = Bluetooth, `25` = Analog IN. Display-only ids: `1` = an active **AirPlay** session, `4` = an active **Spotify Connect** session — both activate themselves when a client connects and cannot be selected. Not to be confused with the *group 3* `0x03` multi-room get |
 | 2 | `0x28`* | `0x29` | `0x2A` | **Volume** ✓ | 0-100; `0x29` is pushed on every change, and the speaker echoes a console frame (`group 0x00FF`, cmd `0xFF`) with `{"cmd":"set volume:NN OK"}` |
 | 2 | `0x30` | `0x31` | — | Preset list(?) | returned `[]` (all presets empty on the test device) |
 | 2 | `0x34` | `0x35` | `0x36` | **Loudness** ✓ | `0/1` — verified on a live speaker |
 | 2 | `0x37` | `0x38` | — | **Device status** | JSON: `SSID, MAC, RSSI, IP, SN, LS9, Kleernet, Controler, Name, Battery, STBY, volume, Brightness, UpdateMode, UpdateState, mcuType, AutoPowerOn, PowerOnSrc, netstate`. `RSSI` is a quality code, higher = worse: `2` = Good, `3` = Bad, `4` = Very bad (device-verified; `1` = Very good inferred) |
 | 2 | `0x33` | ? | — | **Play state read** | sent by the app on connect; the state is pushed as event op `0x33` |
-| 2 | `0x3C` | `0x3D` | — | **Playback** | JSON: `{"source":1,"state":0,"volume":48}` — `state`: `0` = stopped/idle, `1` = playing, `2` = paused (verified with an active AirPlay stream) |
+| 2 | `0x3C` | `0x3D` | — | **Playback** | JSON: `{"source":4,"state":1,"volume":22,"url":"","title":"…","albumUrl":"https://…"}` — `state`: `0` = stopped, `1` = playing (paused also reports `0`; "paused" only exists in the event pushes). `title`/`albumUrl` are present while a track is loaded |
 | 2 | `0x41` | `0x42` | `0x43` | **Aux-In high sensitivity** ✓ | `0/1` — verified on a live speaker |
 | 2 | `0x47` | `0x48` | — | unknown flag | value `0` in capture |
 | 2 | `0x59`* | `0x5A` | `0x5B` | **Auto power on** | ack is JSON `{"AutoPowerOn":n}`; state also in device status |
@@ -123,7 +123,9 @@ carry a 16-bit checksum which can be ignored.
 |---|---|---|
 | `0x03` | c→s | subscribe/handshake (empty payload) |
 | `0x0A` / `0x32` | s→c | source changed push — payload is the ASCII source id (e.g. `"19"`) |
-| `0x33` | s→c | play-state push — ASCII `0` stopped, `1` playing, `2` paused (fires for AirPlay/Spotify too, enabling instant state in HA) |
+| `0x2A` / `0x2D` | s→c | **"PlayView" push**: JSON with now-playing metadata — `TrackName`, `Artist`, `Album`, `CoverArtUrl`, `TotalTime` (ms), `PlayState`, `Current Source`, `Shuffle`, `Repeat`, `PlayUrl` (sent twice, once per op) |
+| `0x31` | s→c | playback position push in ms, ~1/second while playing |
+| `0x33` | s→c | play-state push — **ASCII `0` = playing/active, `2` = paused** (NB: a *different* enum than the playback JSON's `state`!). Fires for AirPlay/Spotify too, enabling instant state in HA |
 | `0x40` | c→s (`VV=0x01`) | volume query — reply payload is the ASCII volume; also pushed on volume changes |
 | `0x46` | s→c | `SPEAKER_ACTIVE,<source id>` push |
 | `0x67` | s→c | multi-room channel status push: `FREE,STEREO,<concurrent-SSID>` (pair-state, channel) |
