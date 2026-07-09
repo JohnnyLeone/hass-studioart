@@ -60,9 +60,8 @@ class RevoxMediaPlayer(RevoxEntity, MediaPlayerEntity):
         st = self.coordinator.data
         if st is None or not st.available:
             return MediaPlayerState.OFF
-        if st.standby:
-            return MediaPlayerState.OFF
-        # play_state codes are not fully documented; treat 0 as idle.
+        # NB: the device's STBY flag is 1 even while actively playing, so it
+        # cannot be used for the power state. state 1 = playing (verified).
         if st.play_state and st.play_state != 0:
             return MediaPlayerState.PLAYING
         return MediaPlayerState.IDLE
@@ -95,6 +94,7 @@ class RevoxMediaPlayer(RevoxEntity, MediaPlayerEntity):
             return {}
         return {
             "battery": st.battery,
+            "standby_flag": st.standby,
             "wifi_ssid": st.ssid,
             "wifi_rssi": st.rssi,
             "paired_speakers": [p.get("name") for p in st.paired],

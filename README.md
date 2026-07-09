@@ -59,7 +59,7 @@ UTF-8 JSON object.
 
 | Group | Get | Reply | Set | Meaning | Payload / notes |
 |---|---|---|---|---|---|
-| 2 | — | — | `0x03` | **Select source** ✓ | numeric id: `19` = AirPlay, `25` = Analog IN (confirmed by tapping the app's Source tiles). Not to be confused with the *group 3* `0x03` multi-room get. The idle/default id `1` is not yet named |
+| 2 | — | — | `0x03` | **Select source** ✓ | numeric id, device-verified: `19` = Bluetooth, `25` = Analog IN. Id `1` = an active **AirPlay** session — AirPlay cannot be selected, it activates itself when a client connects (and its tile disappears from the app when another source is active). Not to be confused with the *group 3* `0x03` multi-room get |
 | 2 | `0x28`* | `0x29` | `0x2A` | **Volume** ✓ | 0-100; `0x29` is pushed on every change, and the speaker echoes a console frame (`group 0x00FF`, cmd `0xFF`) with `{"cmd":"set volume:NN OK"}` |
 | 2 | `0x30` | `0x31` | — | Preset list(?) | returned `[]` (all presets empty on the test device) |
 | 2 | `0x34` | `0x35` | `0x36` | **Loudness** ✓ | `0/1` — verified on a live speaker |
@@ -190,11 +190,10 @@ mirror pushes, so flip things in the StudioART app and read off the
 
 ## Still unmapped
 
-- **Numeric source ids** beyond `19` (AirPlay) and `25` (Analog IN): the ids
-  behind the Presets, iRadio, Podcasts, Server, Bluetooth, Spotify, TIDAL and
-  Deezer tiles are unknown, as is the meaning of the idle/default id `1`.
-  Tap tiles in the app while running `watch` (look for mirrored
-  `group=2 cmd=0x03` sets) and report back.
+- **Numeric source ids** beyond `19` (Bluetooth), `25` (Analog IN) and `1`
+  (AirPlay session): the ids behind the Presets, iRadio, Podcasts, Server,
+  Spotify, TIDAL and Deezer tiles are unknown. Tap tiles in the app while
+  running `watch` (look for mirrored `group=2 cmd=0x03` sets) and report back.
 - `group 2, 0x30→0x31` (returns `[]`) and `0x47→0x48` (returns `0`) — read by
   the app on connect, meaning unknown (`0x30` is possibly the preset list).
 - Standby timer **set** (power menu: Immediately/15/30/45/60 min) — the read is
@@ -216,6 +215,10 @@ mirror pushes, so flip things in the StudioART app and read off the
   Channel show device state as soon as the first poll/push confirms it.
 - **Restart** makes the speaker drop off the network for a short while; the
   integration will show it unavailable until it reconnects.
+- **`STBY` flag**: the device reports `STBY:1` even while actively playing, so
+  it cannot indicate the power state. The media player derives playing/idle
+  from the playback state and exposes the raw flag as the `standby_flag`
+  attribute.
 - **Battery `255`** means "fully charged" (the official app shows 100%) and is
   normalized to 100 by the integration.
 - The **firmware version** is shown once, in the device information

@@ -19,10 +19,10 @@ Port 50007 — control. Carries two protocols simultaneously:
    Confirmed triplets/reads (see README for the capture evidence; the
    loudness/aux-trigger assignment was verified against a live speaker):
 
-     group 2,               set 0x03  Select source by numeric id (19 = AirPlay,
-                                     25 = Analog IN; what the app's Source tab
-                                     sends — not to be confused with the
-                                     group 3 / 0x03 multi-room *get*)
+     group 2,               set 0x03  Select source by numeric id (19 = Bluetooth,
+                                     25 = Analog IN; id 1 = active AirPlay
+                                     session, display-only — not to be confused
+                                     with the group 3 / 0x03 multi-room *get*)
      group 2, 0x28* -> 0x29, set 0x2A  Volume 0-100 (0x29 is also pushed on
                                      every change; the speaker additionally
                                      echoes a console frame group 0x00FF/0xFF
@@ -108,7 +108,7 @@ _CMD_STANDBY_TIMER = (2, 0x8D, 0x8E)
 _TOGGLE_POLL_INTERVAL = 60.0
 
 # Binary set commands (group, set_cmd); ack comes back as set_cmd - 1.
-SET_SOURCE = (2, 0x03)  # numeric source id (19 = AirPlay, 25 = Analog IN)
+SET_SOURCE = (2, 0x03)  # numeric source id (19 = Bluetooth, 25 = Analog IN)
 SET_VOLUME = (2, 0x2A)  # 0-100; change notifications arrive as cmd 0x29
 SET_LOUDNESS = (2, 0x36)
 SET_AUX_HIGH_SENS = (2, 0x43)

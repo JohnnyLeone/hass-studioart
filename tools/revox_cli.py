@@ -277,7 +277,7 @@ def main() -> int:
         # power action: value 2 = reboot (speaker drops off the network briefly)
         send_bin(host, 2, 0x4D, 2)
     elif verb == "srcid":
-        # select source by numeric id (19 = AirPlay, 25 = Analog IN)
+        # select source by numeric id (19 = Bluetooth, 25 = Analog IN)
         send_bin(host, 2, 0x03, int(rest[0], 0))
     elif verb == "binvolume":
         send_bin(host, 2, 0x2A, int(rest[0], 0))
