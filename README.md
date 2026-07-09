@@ -59,10 +59,12 @@ UTF-8 JSON object.
 
 | Group | Get | Reply | Set | Meaning | Payload / notes |
 |---|---|---|---|---|---|
-| 2 | `0x30` | `0x31` | — | unknown list | returned `[]` |
+| 2 | — | — | `0x03` | **Select source** ✓ | numeric id: `19` = AirPlay, `25` = Analog IN (confirmed by tapping the app's Source tiles). Not to be confused with the *group 3* `0x03` multi-room get. The idle/default id `1` is not yet named |
+| 2 | `0x28`* | `0x29` | `0x2A` | **Volume** ✓ | 0-100; `0x29` is pushed on every change, and the speaker echoes a console frame (`group 0x00FF`, cmd `0xFF`) with `{"cmd":"set volume:NN OK"}` |
+| 2 | `0x30` | `0x31` | — | Preset list(?) | returned `[]` (all presets empty on the test device) |
 | 2 | `0x34` | `0x35` | `0x36` | **Loudness** ✓ | `0/1` — verified on a live speaker |
 | 2 | `0x37` | `0x38` | — | **Device status** | JSON: `SSID, MAC, RSSI, IP, SN, LS9, Kleernet, Controler, Name, Battery, STBY, volume, Brightness, UpdateMode, UpdateState, mcuType, AutoPowerOn, PowerOnSrc, netstate`. `RSSI` is a quality code, higher = worse: `2` = Good, `3` = Bad, `4` = Very bad (device-verified; `1` = Very good inferred) |
-| 2 | `0x3C` | `0x3D` | — | **Playback** | JSON: `{"source":1,"state":0,"volume":48}` |
+| 2 | `0x3C` | `0x3D` | — | **Playback** | JSON: `{"source":1,"state":0,"volume":48}` — `state`: `0` = idle/stopped, `1` = playing (verified with an active AirPlay stream) |
 | 2 | `0x41` | `0x42` | `0x43` | **Aux-In high sensitivity** ✓ | `0/1` — verified on a live speaker |
 | 2 | `0x47` | `0x48` | — | unknown flag | value `0` in capture |
 | 2 | `0x59`* | `0x5A` | `0x5B` | **Auto power on** | ack is JSON `{"AutoPowerOn":n}`; state also in device status |
@@ -119,11 +121,14 @@ carry a 16-bit checksum which can be ignored.
 | Op | Direction | Meaning |
 |---|---|---|
 | `0x03` | c→s | subscribe/handshake (empty payload) |
-| `0x40` | c→s (`VV=0x01`) | volume query — reply payload is the ASCII volume |
+| `0x0A` / `0x32` | s→c | source changed push — payload is the ASCII source id (e.g. `"19"`) |
+| `0x40` | c→s (`VV=0x01`) | volume query — reply payload is the ASCII volume; also pushed on volume changes |
+| `0x46` | s→c | `SPEAKER_ACTIVE,<source id>` push |
 | `0x67` | s→c | multi-room channel status push: `FREE,STEREO,<concurrent-SSID>` (pair-state, channel) |
 | `0x6A` | c→s | send a bare ASCII command — **this is how the app sends `SETSTEREO` / `SETLEFT` / `SETRIGHT`** |
 | `0x70` | s→c | **mirror push**: wraps every binary frame the speaker *receives* on port 50007, from any client — sets carry the new value, so subscribers learn about every change instantly |
 | `0xD0` | c→s | ASCII query, e.g. `READ_fwdownload_xml` → `fwdownload_xml:http://update.revox.de/Studioproducts/A100ATMEL/fw_update.xml` |
+| `0xD1` | s→c | Bluetooth event push, e.g. `btdisconnect` |
 
 The integration keeps a persistent subscription on this channel: when you flip
 a toggle in the StudioART app, the mirrored set frame updates the Home
@@ -185,8 +190,13 @@ mirror pushes, so flip things in the StudioART app and read off the
 
 ## Still unmapped
 
+- **Numeric source ids** beyond `19` (AirPlay) and `25` (Analog IN): the ids
+  behind the Presets, iRadio, Podcasts, Server, Bluetooth, Spotify, TIDAL and
+  Deezer tiles are unknown, as is the meaning of the idle/default id `1`.
+  Tap tiles in the app while running `watch` (look for mirrored
+  `group=2 cmd=0x03` sets) and report back.
 - `group 2, 0x30→0x31` (returns `[]`) and `0x47→0x48` (returns `0`) — read by
-  the app on connect, meaning unknown.
+  the app on connect, meaning unknown (`0x30` is possibly the preset list).
 - Standby timer **set** (power menu: Immediately/15/30/45/60 min) — the read is
   `group 2, 0x8D` (`{"timersty":n}`), the set is presumably `0x8F` but has not
   been captured yet.

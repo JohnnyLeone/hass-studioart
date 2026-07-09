@@ -26,9 +26,18 @@ CONF_HOST = "host"
 CONF_PORT = "port"
 
 # ---------------------------------------------------------------------------
-# Source list. The A100 exposes 5 presets plus Bluetooth and Aux.
-# The ASCII command for each is documented in the README.
+# Sources. Two mechanisms exist:
+#   * numeric ids via binary set group 2 / 0x03 (what the app's Source tab
+#     sends) — ids confirmed on the wire: 19 = AirPlay, 25 = Analog IN
+#   * documented ASCII commands for presets/Bluetooth/Aux
+# The playback status reports the numeric id ("source").
 # ---------------------------------------------------------------------------
+SOURCE_IDS: dict[str, int] = {
+    "AirPlay": 19,
+    "Analog IN": 25,
+}
+SOURCE_ID_TO_NAME: dict[int, str] = {v: k for k, v in SOURCE_IDS.items()}
+
 SOURCE_COMMANDS: dict[str, str] = {
     "Preset 1": "source preset 0",
     "Preset 2": "source preset 1",
@@ -36,7 +45,7 @@ SOURCE_COMMANDS: dict[str, str] = {
     "Preset 4": "source preset 3",
     "Preset 5": "source preset 4",
     "Bluetooth": "source BT",
-    "Aux": "source aux",
+    "Analog IN": "source aux",
 }
 
 # Multi-room channel assignment ("Multi-room Speaker Setting" in the app).

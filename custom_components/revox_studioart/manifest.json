@@ -1,7 +1,7 @@
 {
   "domain": "revox_studioart",
   "name": "Revox STUDIOART",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "config_flow": true,
   "documentation": "https://github.com/JohnnyLeone/hass-studioart",
   "issue_tracker": "https://github.com/JohnnyLeone/hass-studioart/issues",

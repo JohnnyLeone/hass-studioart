@@ -9,6 +9,8 @@ Examples
     python3 revox_cli.py 192.168.42.163 status
     python3 revox_cli.py 192.168.42.163 volume 40
     python3 revox_cli.py 192.168.42.163 source aux
+    python3 revox_cli.py 192.168.42.163 srcid 19          # numeric source id
+    python3 revox_cli.py 192.168.42.163 binvolume 30      # binary volume 0x2A
     python3 revox_cli.py 192.168.42.163 play | pause | standby | power
     python3 revox_cli.py 192.168.42.163 loudness 1        # binary set 0x36
     python3 revox_cli.py 192.168.42.163 aux-trigger 0     # set 0x9E inverted
@@ -274,6 +276,11 @@ def main() -> int:
     elif verb == "restart":
         # power action: value 2 = reboot (speaker drops off the network briefly)
         send_bin(host, 2, 0x4D, 2)
+    elif verb == "srcid":
+        # select source by numeric id (19 = AirPlay, 25 = Analog IN)
+        send_bin(host, 2, 0x03, int(rest[0], 0))
+    elif verb == "binvolume":
+        send_bin(host, 2, 0x2A, int(rest[0], 0))
     elif verb in TOGGLES:
         group, cmd = TOGGLES[verb]
         send_bin(host, group, cmd, int(rest[0], 0))

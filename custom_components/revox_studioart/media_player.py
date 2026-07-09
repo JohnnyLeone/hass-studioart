@@ -13,14 +13,13 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
-from .const import DOMAIN, SOURCE_COMMANDS
+from .const import DOMAIN, SOURCE_COMMANDS, SOURCE_ID_TO_NAME, SOURCE_IDS
 from .coordinator import RevoxCoordinator
 from .entity import RevoxEntity
 
-# Best-effort mapping of the integer reported in the playback status back to a
-# source name. Verified indices can be filled in over time; unknown values fall
-# back to the last source we selected.
-SOURCE_INT_TO_NAME: dict[int, str] = {}
+# Everything selectable: numeric-id sources (app mechanism) plus the
+# documented ASCII sources. Names overlapping in both maps prefer the id.
+SOURCE_LIST: list[str] = sorted(set(SOURCE_IDS) | set(SOURCE_COMMANDS))
 
 SUPPORT = (
     MediaPlayerEntityFeature.VOLUME_SET
@@ -48,7 +47,7 @@ class RevoxMediaPlayer(RevoxEntity, MediaPlayerEntity):
     _attr_name = None  # use the device name
     _attr_device_class = MediaPlayerDeviceClass.SPEAKER
     _attr_supported_features = SUPPORT
-    _attr_source_list = list(SOURCE_COMMANDS)
+    _attr_source_list = SOURCE_LIST
 
     def __init__(self, coordinator: RevoxCoordinator) -> None:
         super().__init__(coordinator)
@@ -85,8 +84,8 @@ class RevoxMediaPlayer(RevoxEntity, MediaPlayerEntity):
     @property
     def source(self) -> str | None:
         st = self.coordinator.data
-        if st is not None and st.source in SOURCE_INT_TO_NAME:
-            return SOURCE_INT_TO_NAME[st.source]
+        if st is not None and st.source in SOURCE_ID_TO_NAME:
+            return SOURCE_ID_TO_NAME[st.source]
         return self._last_source
 
     @property
@@ -131,13 +130,18 @@ class RevoxMediaPlayer(RevoxEntity, MediaPlayerEntity):
             )
 
     async def async_select_source(self, source: str) -> None:
-        cmd = SOURCE_COMMANDS.get(source)
-        if not cmd:
-            return
         self._last_source = source
-        await self.coordinator.async_command(
-            self.coordinator.client.select_source(cmd)
-        )
+        if source in SOURCE_IDS:
+            # numeric id, exactly like the app's Source tab
+            await self.coordinator.async_command(
+                self.coordinator.client.select_source_id(SOURCE_IDS[source])
+            )
+            return
+        cmd = SOURCE_COMMANDS.get(source)
+        if cmd:
+            await self.coordinator.async_command(
+                self.coordinator.client.select_source(cmd)
+            )
 
     async def async_media_play(self) -> None:
         await self.coordinator.async_command(self.coordinator.client.play())

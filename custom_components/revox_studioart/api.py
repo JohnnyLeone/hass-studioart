@@ -19,6 +19,14 @@ Port 50007 — control. Carries two protocols simultaneously:
    Confirmed triplets/reads (see README for the capture evidence; the
    loudness/aux-trigger assignment was verified against a live speaker):
 
+     group 2,               set 0x03  Select source by numeric id (19 = AirPlay,
+                                     25 = Analog IN; what the app's Source tab
+                                     sends — not to be confused with the
+                                     group 3 / 0x03 multi-room *get*)
+     group 2, 0x28* -> 0x29, set 0x2A  Volume 0-100 (0x29 is also pushed on
+                                     every change; the speaker additionally
+                                     echoes a console frame group 0x00FF/0xFF
+                                     with {"cmd":"set volume:NN OK"})
      group 2, 0x30 -> 0x31          unknown list read (returns "[]")
      group 2, 0x34 -> 0x35, set 0x36  Loudness (0/1)
      group 2, 0x37 -> 0x38          full device status (JSON)
@@ -100,6 +108,8 @@ _CMD_STANDBY_TIMER = (2, 0x8D, 0x8E)
 _TOGGLE_POLL_INTERVAL = 60.0
 
 # Binary set commands (group, set_cmd); ack comes back as set_cmd - 1.
+SET_SOURCE = (2, 0x03)  # numeric source id (19 = AirPlay, 25 = Analog IN)
+SET_VOLUME = (2, 0x2A)  # 0-100; change notifications arrive as cmd 0x29
 SET_LOUDNESS = (2, 0x36)
 SET_AUX_HIGH_SENS = (2, 0x43)
 SET_POWER_ON_SOURCE = (2, 0x58)
@@ -113,11 +123,15 @@ POWER_ACTION_RESTART = 2
 
 # Event channel opcodes
 _EV_HANDSHAKE = 0x03
-_EV_VOLUME = 0x40
+_EV_SOURCE_A = 0x0A  # push: ASCII source id, e.g. "19"
+_EV_SOURCE_B = 0x32  # push: ASCII source id (sent alongside 0x0A)
+_EV_VOLUME = 0x40  # query; also pushed with the ASCII volume on changes
+_EV_SPEAKER_ACTIVE = 0x46  # push: "SPEAKER_ACTIVE,<source id>"
 _EV_CHANNEL_STATUS = 0x67
 _EV_ASCII_CMD = 0x6A
 _EV_MIRROR = 0x70
 _EV_QUERY = 0xD0
+_EV_BT_EVENT = 0xD1  # push: e.g. "btdisconnect"
 
 
 class RevoxError(Exception):
@@ -419,7 +433,8 @@ class RevoxStudioArtClient:
 
     # -- convenience controls ---------------------------------------------
     async def set_volume(self, volume: int) -> None:
-        await self.async_send_cmd(f"volume {max(0, min(100, int(volume)))}")
+        # binary volume set as used by the app's Play tab
+        await self.async_set_bin(*SET_VOLUME, max(0, min(100, int(volume))))
 
     async def volume_up(self) -> None:
         await self.async_send_cmd("volup")
@@ -432,6 +447,10 @@ class RevoxStudioArtClient:
 
     async def select_source(self, ascii_cmd: str) -> None:
         await self.async_send_cmd(ascii_cmd)
+
+    async def select_source_id(self, source_id: int) -> None:
+        """Switch to a numeric source id, as the app's Source tab does."""
+        await self.async_set_bin(*SET_SOURCE, source_id)
 
     async def play(self) -> None:
         await self.async_send_cmd("play")
@@ -621,14 +640,27 @@ class RevoxStudioArtClient:
 
     def _parse_event(self, op: int, payload: bytes) -> dict[str, Any]:
         """Turn one push frame into a partial-state dict."""
+        text = payload.decode("utf-8", "replace") if payload else ""
         if op == _EV_CHANNEL_STATUS and payload:
             # "FREE,STEREO,RevoxA10028C65AHN"
-            parts = payload.decode("utf-8", "replace").split(",")
+            parts = text.split(",")
             partial: dict[str, Any] = {"_activity": True}
             if len(parts) >= 2:
                 partial["pair_state"] = parts[0]
                 partial["channel"] = parts[1]
             return partial
+        if op in (_EV_SOURCE_A, _EV_SOURCE_B) and text.isdigit():
+            return {"source": int(text), "_activity": True}
+        if op == _EV_SPEAKER_ACTIVE and "," in text:
+            # "SPEAKER_ACTIVE,25"
+            source = text.rsplit(",", 1)[-1]
+            if source.isdigit():
+                return {"source": int(source), "_activity": True}
+            return {"_activity": True}
+        if op == _EV_VOLUME and text.isdigit():
+            return {"volume": int(text), "_activity": True}
+        if op == _EV_BT_EVENT and payload:
+            return {"_activity": True}
         if op == _EV_MIRROR and len(payload) >= 2:
             # payload is a complete binary control frame: [len][group][cmd][data]
             length = struct.unpack(">H", payload[0:2])[0]
@@ -652,6 +684,10 @@ class RevoxStudioArtClient:
         if not data:
             return {"_activity": True} if cmd else {}
         value = data[0]
+        if (group, cmd) == SET_SOURCE:
+            return {"source": value, "_activity": True}
+        if (group, cmd) == SET_VOLUME:
+            return {"volume": value, "_activity": True}
         if (group, cmd) == SET_DIS_AUTO_AUX:
             return {
                 "aux_trigger": not value,
