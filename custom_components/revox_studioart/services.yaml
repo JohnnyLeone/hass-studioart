@@ -1,0 +1,57 @@
+send_command:
+  name: Send raw command
+  description: >-
+    Send a raw command to a STUDIOART speaker. Use this to experiment with
+    controls that do not yet have a dedicated entity (e.g. Aux-In trigger).
+  fields:
+    entry_id:
+      name: Config entry ID
+      description: The config entry (device) to target.
+      required: true
+      example: "1a2b3c..."
+      selector:
+        text:
+    ascii:
+      name: ASCII command
+      description: Text sent after "cmd " (e.g. "volume 40", "source aux", "loudness").
+      required: false
+      example: "volume 40"
+      selector:
+        text:
+    raw:
+      name: Raw line
+      description: A bare line terminated with CRLF (e.g. "SETLEFT").
+      required: false
+      example: "SETLEFT"
+      selector:
+        text:
+    bin_group:
+      name: Binary group
+      description: Namespace id for a binary set command (2 = device, 3 = multi-room).
+      required: false
+      example: 2
+      selector:
+        number:
+          min: 0
+          max: 65535
+          mode: box
+    bin_cmd:
+      name: Binary set command
+      description: The set command byte (e.g. 0x5B = 91 for Auto power on).
+      required: false
+      example: 91
+      selector:
+        number:
+          min: 0
+          max: 255
+          mode: box
+    bin_value:
+      name: Binary value
+      description: The value byte (usually 0 or 1).
+      required: false
+      example: 1
+      selector:
+        number:
+          min: 0
+          max: 255
+          mode: box

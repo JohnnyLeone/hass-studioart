@@ -1,0 +1,27 @@
+{
+  "domain": "revox_studioart",
+  "name": "Revox STUDIOART",
+  "version": "0.3.0",
+  "config_flow": true,
+  "documentation": "https://github.com/JohnnyLeone/hass-studioart",
+  "issue_tracker": "https://github.com/JohnnyLeone/hass-studioart/issues",
+  "codeowners": ["@JohnnyLeone"],
+  "iot_class": "local_push",
+  "integration_type": "device",
+  "dependencies": [],
+  "requirements": [],
+  "zeroconf": [
+    {
+      "type": "_raop._tcp.local.",
+      "properties": {
+        "am": "revox*"
+      }
+    },
+    {
+      "type": "_airplay._tcp.local.",
+      "properties": {
+        "model": "revox*"
+      }
+    }
+  ]
+}
