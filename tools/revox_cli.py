@@ -15,7 +15,9 @@ Examples
     python3 revox_cli.py 192.168.42.163 aux-sens 1        # binary set 0x43
     python3 revox_cli.py 192.168.42.163 lrswap 0          # binary set 0x62
     python3 revox_cli.py 192.168.42.163 autopoweron 1     # binary set 0x5B
-    python3 revox_cli.py 192.168.42.163 poweronsrc 0      # binary set 0x9B
+    python3 revox_cli.py 192.168.42.163 poweronsrc 0      # binary set 0x58
+    python3 revox_cli.py 192.168.42.163 kleernet-band 0   # 0=auto 1=2.4G 2=5.2G 3=5.8G
+    python3 revox_cli.py 192.168.42.163 restart           # reboot the speaker
     python3 revox_cli.py 192.168.42.163 bassboost 1
     python3 revox_cli.py 192.168.42.163 channel left      # SETLEFT via port 7777
     python3 revox_cli.py 192.168.42.163 cmd "volume 55"   # raw `cmd ...`
@@ -41,14 +43,16 @@ READS = {
     "loudness": (2, 0x34, 0x35),
     "aux_high_sens": (2, 0x41, 0x42),
     "kleernet": (3, 0x56, 0x57),
+    "standby_timer": (2, 0x8D, 0x8E),
 }
 
 TOGGLES = {  # verb -> (group, set_cmd)
     "loudness": (2, 0x36),
     "aux-sens": (2, 0x43),
+    "poweronsrc": (2, 0x58),  # 0=last played, 1-5=presets, 6=BT, 7=analog in
     "autopoweron": (2, 0x5B),
     "lrswap": (2, 0x62),
-    "poweronsrc": (2, 0x9B),
+    "kleernet-band": (2, 0x9B),  # 0=auto, 1=2.4G, 2=5.2G, 3=5.8G
     # "disable auto aux": 1 turns the Aux-In trigger OFF. Prefer the
     # `aux-trigger` verb which handles the inversion for you.
     "disautoaux": (2, 0x9E),
@@ -267,6 +271,9 @@ def main() -> int:
     elif verb == "aux-trigger":
         # wire command is "disable auto aux" -> inverted
         send_bin(host, 2, 0x9E, 0 if int(rest[0], 0) else 1)
+    elif verb == "restart":
+        # power action: value 2 = reboot (speaker drops off the network briefly)
+        send_bin(host, 2, 0x4D, 2)
     elif verb in TOGGLES:
         group, cmd = TOGGLES[verb]
         send_bin(host, group, cmd, int(rest[0], 0))

@@ -69,16 +69,6 @@ SENSORS: tuple[RevoxSensorDescription, ...] = (
         entity_registry_enabled_default=False,
         value=lambda st: st.brightness,
     ),
-    RevoxSensorDescription(
-        # Kleernet wireless band ("D83Fre"): 0 = automatic; the mapping of the
-        # remaining values to 2.4/5.2/5.8 GHz is not yet confirmed.
-        key="kleernet_band",
-        name="Kleernet band (raw)",
-        icon="mdi:radio-tower",
-        entity_category=EntityCategory.DIAGNOSTIC,
-        entity_registry_enabled_default=False,
-        value=lambda st: st.kleernet_band,
-    ),
 )
 
 

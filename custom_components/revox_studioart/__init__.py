@@ -23,6 +23,7 @@ PLATFORMS: list[Platform] = [
     Platform.SELECT,
     Platform.SENSOR,
     Platform.NUMBER,
+    Platform.BUTTON,
 ]
 
 

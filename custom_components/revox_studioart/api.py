@@ -25,9 +25,17 @@ Port 50007 — control. Carries two protocols simultaneously:
      group 2, 0x3C -> 0x3D          playback state (JSON: source/state/volume)
      group 2, 0x41 -> 0x42, set 0x43  Aux-In trigger high sensitivity (0/1)
      group 2, 0x47 -> 0x48          unknown flag (value 0 in capture)
+     group 2, 0x4D -> 0x4E          power action: value 2 = restart
+                                     (ack {"poweroff":1}, then the speaker reboots)
+     group 2,        0x57, set 0x58  Power-on source (ack {"PowerOnSrc":n};
+                                     0 = last played, 1-5 = presets,
+                                     6 = Bluetooth, 7 = Analog IN)
      group 2,        0x5A, set 0x5B  Auto power on (ack is JSON {"AutoPowerOn":n})
      group 2,        0x61, set 0x62  Switch L/R channel (0/1; state = LRreverse)
-     group 2,        0x9A, set 0x9B  Power-on source (int; state = PowerOnSrc)
+     group 2, 0x8D -> 0x8E          standby timer (JSON {"timersty":n})
+     group 2,        0x9A, set 0x9B  Kleernet wireless band (0 = automatic,
+                                     1 = 2.4G, 2 = 5.2G, 3 = 5.8G;
+                                     state = "D83Fre" in the Kleernet JSON)
      group 2,        0x9D, set 0x9E  Disable auto aux = Aux-In trigger INVERTED
                                      (1 = trigger off; state = "DisAutoAux" in
                                      the group 3 / 0x57 Kleernet JSON)
@@ -84,6 +92,7 @@ _CMD_AUX_HIGH_SENS = (2, 0x41, 0x42)
 # Aux-In trigger state is NOT polled directly: it is the inverse of the
 # "DisAutoAux" field in the Kleernet JSON below.
 _CMD_KLEERNET = (3, 0x56, 0x57)
+_CMD_STANDBY_TIMER = (2, 0x8D, 0x8E)
 
 # Reading the loudness/high-sensitivity triplets makes an open StudioART app
 # flicker those toggles (it misrenders the mirrored get frames), so we poll
@@ -93,10 +102,14 @@ _TOGGLE_POLL_INTERVAL = 60.0
 # Binary set commands (group, set_cmd); ack comes back as set_cmd - 1.
 SET_LOUDNESS = (2, 0x36)
 SET_AUX_HIGH_SENS = (2, 0x43)
+SET_POWER_ON_SOURCE = (2, 0x58)
 SET_AUTO_POWER_ON = (2, 0x5B)
 SET_LR_SWAP = (2, 0x62)
-SET_POWER_ON_SOURCE = (2, 0x9B)
+SET_KLEERNET_BAND = (2, 0x9B)  # 0=auto, 1=2.4G, 2=5.2G, 3=5.8G
 SET_DIS_AUTO_AUX = (2, 0x9E)  # 1 = Aux-In trigger OFF (inverted)
+# power action command (request/reply, not a settings triplet)
+CMD_POWER_ACTION = (2, 0x4D)
+POWER_ACTION_RESTART = 2
 
 # Event channel opcodes
 _EV_HANDSHAKE = 0x03
@@ -149,8 +162,10 @@ class RevoxState:
     channel: str | None = None  # "STEREO" / "LEFT" / "RIGHT"
     pair_state: str | None = None  # e.g. "FREE"
     # Kleernet config (group 3, 0x57)
-    kleernet_band: int | None = None  # "D83Fre": 0 = automatic
+    kleernet_band: int | None = None  # "D83Fre": 0=auto, 1=2.4G, 2=5.2G, 3=5.8G
     dis_auto_aux: bool | None = None
+    # standby timer (group 2, 0x8E: {"timersty":n}, minutes; 0 = none)
+    standby_timer: int | None = None
     raw: dict[str, Any] = field(default_factory=dict)
 
     @property
@@ -280,6 +295,7 @@ class RevoxStudioArtClient:
                 play = await self._request_json(reader, writer, *_CMD_PLAYBACK)
                 multi = await self._optional_json(reader, writer, _CMD_MULTIROOM)
                 kleer = await self._optional_json(reader, writer, _CMD_KLEERNET)
+                timer = await self._optional_json(reader, writer, _CMD_STANDBY_TIMER)
                 now = asyncio.get_running_loop().time()
                 if (
                     not self._toggle_cache
@@ -327,6 +343,7 @@ class RevoxStudioArtClient:
         st.paired = multi.get("paired", []) or []
         st.kleernet_band = kleer.get("D83Fre")
         st.dis_auto_aux = _as_bool(kleer.get("DisAutoAux"))
+        st.standby_timer = timer.get("timersty")
         # Aux-In trigger is the inverse of "DisAutoAux" (verified on device)
         if st.dis_auto_aux is not None:
             st.aux_trigger = not st.dis_auto_aux
@@ -449,6 +466,13 @@ class RevoxStudioArtClient:
 
     async def set_power_on_source(self, index: int) -> None:
         await self.async_set_bin(*SET_POWER_ON_SOURCE, index)
+
+    async def set_kleernet_band(self, band: int) -> None:
+        await self.async_set_bin(*SET_KLEERNET_BAND, band)
+
+    async def restart(self) -> None:
+        """Reboot the speaker (power action 0x4D, value 2)."""
+        await self.async_set_bin(*CMD_POWER_ACTION, POWER_ACTION_RESTART)
 
     async def set_channel(self, channel_cmd: str) -> None:
         """SETSTEREO / SETLEFT / SETRIGHT — via the event channel like the app.
@@ -634,6 +658,8 @@ class RevoxStudioArtClient:
             return {"lr_reverse": bool(value), "_activity": True}
         if (group, cmd) == SET_POWER_ON_SOURCE:
             return {"power_on_source": value, "_activity": True}
+        if (group, cmd) == SET_KLEERNET_BAND:
+            return {"kleernet_band": value, "_activity": True}
         return {"_activity": True}
 
 

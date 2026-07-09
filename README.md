@@ -27,9 +27,11 @@ within a second via the speaker's push channel.
 | `switch` Auto power on | Auto-power-on after charging | binary set `0x5B` | **Confirmed on the wire** |
 | `switch` Bass boost | Bass boost | ASCII `cmd basssboost 0/1` | Documented |
 | `select` Channel | Stereo / Left / Right | `SETSTEREO/SETLEFT/SETRIGHT` via event channel | **Confirmed on the wire**, state pushed back |
-| `select` Power-on source | Default source after manual power on | binary set `0x9B`, state = `PowerOnSrc` | Set confirmed; index labels > 0 provisional |
+| `select` Power-on source | Default source after manual power on | binary set `0x58`, state = `PowerOnSrc` | **Verified on a live speaker** (all indices) |
+| `select` Kleernet wireless band | Automatic / 2.4 / 5.2 / 5.8 GHz | binary set `0x9B`, state = Kleernet `D83Fre` | **Verified on a live speaker** |
+| `button` Restart | Reboot the speaker | binary `0x4D` value `2` | **Confirmed on the wire** |
 | `number` Max volume limit | Volume ceiling | ASCII `cmd maxvolume N` | Documented |
-| `sensor` | Battery, Wi-Fi SSID/RSSI, IP, brightness, Kleernet band | binary status reads | **Confirmed on the wire** |
+| `sensor` | Battery, Wi-Fi SSID/RSSI, IP, brightness | binary status reads | **Confirmed on the wire** |
 
 ## The protocol (reverse-engineered)
 
@@ -65,10 +67,13 @@ UTF-8 JSON object.
 | 2 | `0x47` | `0x48` | — | unknown flag | value `0` in capture |
 | 2 | `0x59`* | `0x5A` | `0x5B` | **Auto power on** | ack is JSON `{"AutoPowerOn":n}`; state also in device status |
 | 2 | `0x60`* | `0x61` | `0x62` | **Switch L/R channel** | `0/1`; state also in multi-room `LRreverse` |
-| 2 | `0x99`* | `0x9A` | `0x9B` | **Power-on source** | int; `0` = Last played (confirmed); state = `PowerOnSrc` |
+| 2 | `0x4B`* | `0x4E` | `0x4D` | **Power action** ✓ | value `2` = restart (ack `{"poweroff":1}`, speaker reboots); note: reply is `0x4E` = cmd+1 |
+| 2 | `0x56`* | `0x57` | `0x58` | **Power-on source** ✓ | ack `{"PowerOnSrc":n}`; `0` = Last played, `1-5` = Presets, `6` = Bluetooth, `7` = Analog IN — all confirmed by cycling the app menu |
+| 2 | `0x8D` | `0x8E` | `0x8F`* | **Standby timer** | JSON `{"timersty":n}` (minutes; read when the app opens the power menu). The set for Immediately/15/30/45/60 min is inferred, not yet captured |
+| 2 | `0x99`* | `0x9A` | `0x9B` | **Kleernet wireless band** ✓ | `0` = automatic, `1` = 2.4G, `2` = 5.2G, `3` = 5.8G (device-verified); state = `D83Fre` in the Kleernet JSON |
 | 2 | — | `0x9D` | `0x9E` | **Disable auto aux** ✓ | `1` = Aux-In trigger **off** (inverted!) — verified on a live speaker; state = `DisAutoAux` in the Kleernet JSON |
 | 3 | `0x03` | `0x04` | — | **Multi-room state** | JSON: `{"state":2,"LRreverse":0,"paired":[{"type":"A100","name":"…","ID":"…","volume":48,"channel":1,"battery":255}]}` |
-| 3 | `0x56` | `0x57` | `0x58`* | **Kleernet config** | JSON: `{"D83Fre":0,"DisAutoAux":0}` — `D83Fre` is the wireless band (0 = automatic; other values unverified) |
+| 3 | `0x56` | `0x57` | — | **Kleernet config** | JSON: `{"D83Fre":0,"DisAutoAux":0}` — `D83Fre` = wireless band, `DisAutoAux` = inverted Aux-In trigger. NB: same cmd numbers as the *group 2* power-on-source triplet — the group disambiguates |
 | 3 | `0x0F` | ? | — | sent for **Check P100** | no reply observed |
 
 `*` = inferred from the triplet pattern, not yet observed on the wire.
@@ -182,9 +187,11 @@ mirror pushes, so flip things in the StudioART app and read off the
 
 - `group 2, 0x30→0x31` (returns `[]`) and `0x47→0x48` (returns `0`) — read by
   the app on connect, meaning unknown.
-- Kleernet band **set** (radio buttons automatic/2.4G/5.2G/5.8G) — probably
-  `group 3, set 0x58` with the `D83Fre` value, but the capture never changed
-  the band. Verify with `watch` before relying on it.
+- Standby timer **set** (power menu: Immediately/15/30/45/60 min) — the read is
+  `group 2, 0x8D` (`{"timersty":n}`), the set is presumably `0x8F` but has not
+  been captured yet.
+- Other power-action values of `group 2, 0x4D` (value `2` = restart is
+  confirmed; `Immediately` standby may be another value of the same command).
 - Pair/unpair flow ("Pair/Unpair Speaker → START") and `Check P100`
   (`group 3, 0x0F`).
 - Firmware update trigger (the app reads the update XML URL via
@@ -197,9 +204,8 @@ mirror pushes, so flip things in the StudioART app and read off the
 - **Optimistic fallbacks**: Bass boost and Max-volume aren't reported by the
   speaker, so their HA state reflects the last command sent. Loudness and
   Channel show device state as soon as the first poll/push confirms it.
-- **Power-on source labels**: index `0` = "Last played" is confirmed; the
-  mapping of indices 1–7 to presets/Bluetooth/Aux follows the app's source
-  order and is provisional — please report back what your speaker does.
+- **Restart** makes the speaker drop off the network for a short while; the
+  integration will show it unavailable until it reconnects.
 - **Battery `255`** means "fully charged" (the official app shows 100%) and is
   normalized to 100 by the integration.
 - The **firmware version** is shown once, in the device information

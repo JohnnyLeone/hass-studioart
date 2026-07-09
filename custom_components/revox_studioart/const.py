@@ -55,9 +55,8 @@ CHANNEL_TOKEN_TO_OPTION = {
     "RIGHT": "Right",
 }
 
-# Power-on source (device status field "PowerOnSrc", set = group 2 / 0x9B).
-# 0 = "Last Played" is confirmed on the wire; the remaining indices follow the
-# app's source order and are provisional until verified.
+# Power-on source (device status field "PowerOnSrc", set = group 2 / 0x58).
+# All indices confirmed on the wire by cycling the app's menu.
 POWER_ON_SOURCE_OPTIONS: dict[int, str] = {
     0: "Last played",
     1: "Preset 1",
@@ -66,5 +65,13 @@ POWER_ON_SOURCE_OPTIONS: dict[int, str] = {
     4: "Preset 4",
     5: "Preset 5",
     6: "Bluetooth",
-    7: "Aux",
+    7: "Analog IN",
+}
+
+# Kleernet wireless band ("D83Fre" in the Kleernet JSON, set = group 2 / 0x9B).
+KLEERNET_BAND_OPTIONS: dict[int, str] = {
+    0: "Automatic",
+    1: "2.4 GHz",
+    2: "5.2 GHz",
+    3: "5.8 GHz",
 }

@@ -13,6 +13,7 @@ from .const import (
     CHANNEL_OPTIONS,
     CHANNEL_TOKEN_TO_OPTION,
     DOMAIN,
+    KLEERNET_BAND_OPTIONS,
     POWER_ON_SOURCE_OPTIONS,
 )
 from .coordinator import RevoxCoordinator
@@ -24,7 +25,11 @@ async def async_setup_entry(
 ) -> None:
     coordinator: RevoxCoordinator = hass.data[DOMAIN][entry.entry_id]
     async_add_entities(
-        [RevoxChannelSelect(coordinator), RevoxPowerOnSourceSelect(coordinator)]
+        [
+            RevoxChannelSelect(coordinator),
+            RevoxPowerOnSourceSelect(coordinator),
+            RevoxKleernetBandSelect(coordinator),
+        ]
     )
 
 
@@ -73,9 +78,8 @@ class RevoxChannelSelect(RevoxEntity, SelectEntity):
 class RevoxPowerOnSourceSelect(RevoxEntity, SelectEntity):
     """Default source after manual power on (device field "PowerOnSrc").
 
-    Set command confirmed on the wire (group 2 / 0x9B); index 0 = "Last
-    played" is verified, the remaining index labels follow the app's source
-    order and are provisional.
+    Set = group 2 / 0x58 (ack {"PowerOnSrc":n}); every index was confirmed on
+    the wire by cycling the app's menu.
     """
 
     _attr_name = "Power-on source"
@@ -99,5 +103,37 @@ class RevoxPowerOnSourceSelect(RevoxEntity, SelectEntity):
             if label == option:
                 await self.coordinator.async_command(
                     self.coordinator.client.set_power_on_source(index)
+                )
+                return
+
+
+class RevoxKleernetBandSelect(RevoxEntity, SelectEntity):
+    """Kleernet wireless band between chief and client speakers.
+
+    Set = group 2 / 0x9B (values confirmed on a live speaker); state is the
+    "D83Fre" field of the Kleernet JSON (group 3 / 0x57).
+    """
+
+    _attr_name = "Kleernet wireless band"
+    _attr_icon = "mdi:radio-tower"
+    _attr_entity_category = EntityCategory.CONFIG
+    _attr_options = list(KLEERNET_BAND_OPTIONS.values())
+
+    def __init__(self, coordinator: RevoxCoordinator) -> None:
+        super().__init__(coordinator)
+        self._attr_unique_id = f"{self._unique_base}_kleernet_band"
+
+    @property
+    def current_option(self) -> str | None:
+        st = self.coordinator.data
+        if st is None or st.kleernet_band is None:
+            return None
+        return KLEERNET_BAND_OPTIONS.get(st.kleernet_band)
+
+    async def async_select_option(self, option: str) -> None:
+        for band, label in KLEERNET_BAND_OPTIONS.items():
+            if label == option:
+                await self.coordinator.async_command(
+                    self.coordinator.client.set_kleernet_band(band)
                 )
                 return
