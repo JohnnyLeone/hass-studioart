@@ -38,9 +38,9 @@ WIFI_QUALITY: dict[int, str] = {
 
 SENSORS: tuple[RevoxSensorDescription, ...] = (
     RevoxSensorDescription(
-        # the raw value 255 ("full / on mains") is normalized to 100 in api.py
+        # the raw value 255 ("full / on mains") is normalized to 100 in api.py;
+        # the name comes from the battery device class
         key="battery",
-        name="Battery",
         device_class=SensorDeviceClass.BATTERY,
         native_unit_of_measurement=PERCENTAGE,
         entity_category=EntityCategory.DIAGNOSTIC,
@@ -48,7 +48,7 @@ SENSORS: tuple[RevoxSensorDescription, ...] = (
     ),
     RevoxSensorDescription(
         key="wifi_ssid",
-        name="Wi-Fi SSID",
+        translation_key="wifi_ssid",
         icon="mdi:wifi",
         entity_category=EntityCategory.DIAGNOSTIC,
         value=lambda st: st.ssid,
@@ -57,7 +57,7 @@ SENSORS: tuple[RevoxSensorDescription, ...] = (
         # The speaker reports a quality code, higher = worse. 2-4 were
         # observed against the app's "Signal Quality" label; 1 is inferred.
         key="wifi_rssi",
-        name="Wi-Fi signal quality",
+        translation_key="wifi_signal_quality",
         device_class=SensorDeviceClass.ENUM,
         options=list(WIFI_QUALITY.values()),
         icon="mdi:wifi",
@@ -66,7 +66,7 @@ SENSORS: tuple[RevoxSensorDescription, ...] = (
     ),
     RevoxSensorDescription(
         key="ip",
-        name="IP address",
+        translation_key="ip_address",
         icon="mdi:ip-network",
         entity_category=EntityCategory.DIAGNOSTIC,
         entity_registry_enabled_default=False,
@@ -75,7 +75,7 @@ SENSORS: tuple[RevoxSensorDescription, ...] = (
     RevoxSensorDescription(
         # LED ring brightness as reported by the device (0-100).
         key="brightness",
-        name="Display brightness",
+        translation_key="brightness",
         icon="mdi:brightness-6",
         native_unit_of_measurement=PERCENTAGE,
         entity_category=EntityCategory.DIAGNOSTIC,

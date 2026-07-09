@@ -37,33 +37,34 @@ class RevoxSwitchDescription(SwitchEntityDescription):
     set_fn: Callable[[RevoxStudioArtClient, bool], Awaitable[None]]
 
 
+# Entity names live in strings.json/translations under the translation_key.
+# Categories: listening behaviour (aux trigger, loudness) is a control;
+# setup-type settings (L/R swap, auto power on) are configuration.
 SWITCHES: tuple[RevoxSwitchDescription, ...] = (
     RevoxSwitchDescription(
         key="aux_trigger",
-        name="Aux-In trigger",
+        translation_key="aux_trigger",
         icon="mdi:audio-input-stereo-minijack",
-        entity_category=EntityCategory.CONFIG,
         value=lambda st: st.aux_trigger,
         set_fn=lambda client, on: client.set_aux_trigger(on),
     ),
     RevoxSwitchDescription(
         key="aux_high_sens",
-        name="Aux-In trigger high sensitivity",
+        translation_key="aux_trigger_high_sensitivity",
         icon="mdi:knob",
-        entity_category=EntityCategory.CONFIG,
         value=lambda st: st.aux_high_sensitivity,
         set_fn=lambda client, on: client.set_aux_high_sensitivity(on),
     ),
     RevoxSwitchDescription(
         key="loudness",
-        name="Loudness",
+        translation_key="loudness",
         icon="mdi:volume-vibrate",
         value=lambda st: st.loudness,
         set_fn=lambda client, on: client.set_loudness(on),
     ),
     RevoxSwitchDescription(
         key="lr_swap",
-        name="Switch L/R channel",
+        translation_key="switch_lr_channel",
         icon="mdi:swap-horizontal",
         entity_category=EntityCategory.CONFIG,
         value=lambda st: st.lr_reverse,
@@ -71,7 +72,7 @@ SWITCHES: tuple[RevoxSwitchDescription, ...] = (
     ),
     RevoxSwitchDescription(
         key="autopoweron",
-        name="Auto power on",
+        translation_key="auto_power_on",
         icon="mdi:power-settings",
         entity_category=EntityCategory.CONFIG,
         value=lambda st: st.auto_power_on,
@@ -129,7 +130,7 @@ class RevoxSwitch(RevoxEntity, SwitchEntity):
 class RevoxBassBoostSwitch(RevoxEntity, SwitchEntity):
     """Bass boost via `cmd basssboost 0/1`. Optimistic (state not reported)."""
 
-    _attr_name = "Bass boost"
+    _attr_translation_key = "bass_boost"
     _attr_icon = "mdi:speaker"
 
     def __init__(self, coordinator: RevoxCoordinator) -> None:

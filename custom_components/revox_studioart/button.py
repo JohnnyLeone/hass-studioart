@@ -27,7 +27,7 @@ class RevoxRestartButton(RevoxEntity, ButtonEntity):
     (it drops off the network for a short while).
     """
 
-    _attr_name = "Restart"
+    # the restart device class provides the entity name
     _attr_device_class = ButtonDeviceClass.RESTART
     _attr_entity_category = EntityCategory.CONFIG
 

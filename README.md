@@ -26,7 +26,7 @@ within a second via the speaker's push channel.
 | `switch` Switch L/R channel | Swap A100 (left) and P100 (right) | binary set `0x62`, state = `LRreverse` | **Confirmed on the wire** |
 | `switch` Auto power on | Auto-power-on after charging | binary set `0x5B` | **Confirmed on the wire** |
 | `switch` Bass boost | Bass boost | ASCII `cmd basssboost 0/1` | Documented |
-| `select` Channel | Stereo / Left / Right | `SETSTEREO/SETLEFT/SETRIGHT` via event channel | **Confirmed on the wire**, state pushed back |
+| `select` Multi-room speaker setting | Stereo / Left channel / Right channel | `SETSTEREO/SETLEFT/SETRIGHT` via event channel | **Confirmed on the wire**, state pushed back |
 | `select` Power-on source | Default source after manual power on | binary set `0x58`, state = `PowerOnSrc` | **Verified on a live speaker** (all indices) |
 | `select` Kleernet wireless band | Automatic / 2.4 / 5.2 / 5.8 GHz | binary set `0x9B`, state = Kleernet `D83Fre` | **Verified on a live speaker** |
 | `button` Restart | Reboot the speaker | binary `0x4D` value `2` | **Confirmed on the wire** |

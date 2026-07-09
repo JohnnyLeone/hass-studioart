@@ -22,5 +22,57 @@
     "error": {
       "cannot_connect": "Could not connect to the speaker on the control port."
     }
+  },
+  "entity": {
+    "switch": {
+      "aux_trigger": {
+        "name": "Aux-In trigger"
+      },
+      "aux_trigger_high_sensitivity": {
+        "name": "Aux-In trigger high sensitivity"
+      },
+      "loudness": {
+        "name": "Loudness"
+      },
+      "switch_lr_channel": {
+        "name": "Switch L/R channel"
+      },
+      "auto_power_on": {
+        "name": "Auto power on"
+      },
+      "bass_boost": {
+        "name": "Bass boost"
+      }
+    },
+    "select": {
+      "multiroom_channel": {
+        "name": "Multi-room speaker setting"
+      },
+      "power_on_source": {
+        "name": "Power-on source"
+      },
+      "kleernet_band": {
+        "name": "Kleernet wireless band"
+      }
+    },
+    "sensor": {
+      "wifi_ssid": {
+        "name": "Wi-Fi SSID"
+      },
+      "wifi_signal_quality": {
+        "name": "Wi-Fi signal quality"
+      },
+      "ip_address": {
+        "name": "IP address"
+      },
+      "brightness": {
+        "name": "Display brightness"
+      }
+    },
+    "number": {
+      "max_volume_limit": {
+        "name": "Max volume limit"
+      }
+    }
   }
 }

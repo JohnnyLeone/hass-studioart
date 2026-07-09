@@ -39,20 +39,21 @@ SOURCE_COMMANDS: dict[str, str] = {
     "Aux": "source aux",
 }
 
-# Multi-room channel assignment. Sent over the event channel (op 0x6A) as the
-# official app does; the speaker answers with an 0x67 status push of the form
-# "FREE,STEREO,<concurrent-SSID>".
+# Multi-room channel assignment ("Multi-room Speaker Setting" in the app).
+# Sent over the event channel (op 0x6A) as the official app does; the speaker
+# answers with an 0x67 status push of the form "FREE,STEREO,<concurrent-SSID>".
+# Option labels follow the app's radio buttons.
 CHANNEL_COMMANDS: dict[str, str] = {
     "Stereo": "SETSTEREO",
-    "Left": "SETLEFT",
-    "Right": "SETRIGHT",
+    "Left channel": "SETLEFT",
+    "Right channel": "SETRIGHT",
 }
 CHANNEL_OPTIONS = list(CHANNEL_COMMANDS)
 # maps the token in the 0x67 push back to the option name
 CHANNEL_TOKEN_TO_OPTION = {
     "STEREO": "Stereo",
-    "LEFT": "Left",
-    "RIGHT": "Right",
+    "LEFT": "Left channel",
+    "RIGHT": "Right channel",
 }
 
 # Power-on source (device status field "PowerOnSrc", set = group 2 / 0x58).

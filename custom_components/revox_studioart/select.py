@@ -34,7 +34,7 @@ async def async_setup_entry(
 
 
 class RevoxChannelSelect(RevoxEntity, SelectEntity):
-    """Stereo / Left / Right channel assignment.
+    """"Multi-room Speaker Setting" in the app: Stereo / Left / Right.
 
     SETSTEREO / SETLEFT / SETRIGHT are sent over the event channel (op 0x6A)
     exactly like the official app. The speaker confirms with an 0x67 status
@@ -43,7 +43,7 @@ class RevoxChannelSelect(RevoxEntity, SelectEntity):
     until the first push arrives.
     """
 
-    _attr_name = "Channel"
+    _attr_translation_key = "multiroom_channel"
     _attr_icon = "mdi:speaker-multiple"
     _attr_options = CHANNEL_OPTIONS
 
@@ -82,7 +82,7 @@ class RevoxPowerOnSourceSelect(RevoxEntity, SelectEntity):
     the wire by cycling the app's menu.
     """
 
-    _attr_name = "Power-on source"
+    _attr_translation_key = "power_on_source"
     _attr_icon = "mdi:power-on"
     _attr_entity_category = EntityCategory.CONFIG
     _attr_options = list(POWER_ON_SOURCE_OPTIONS.values())
@@ -114,7 +114,7 @@ class RevoxKleernetBandSelect(RevoxEntity, SelectEntity):
     "D83Fre" field of the Kleernet JSON (group 3 / 0x57).
     """
 
-    _attr_name = "Kleernet wireless band"
+    _attr_translation_key = "kleernet_band"
     _attr_icon = "mdi:radio-tower"
     _attr_entity_category = EntityCategory.CONFIG
     _attr_options = list(KLEERNET_BAND_OPTIONS.values())

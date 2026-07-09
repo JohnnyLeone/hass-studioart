@@ -23,7 +23,7 @@ async def async_setup_entry(
 class RevoxMaxVolume(RevoxEntity, NumberEntity):
     """Volume limit via `cmd maxvolume N`. Not reported back, so optimistic."""
 
-    _attr_name = "Max volume limit"
+    _attr_translation_key = "max_volume_limit"
     _attr_icon = "mdi:volume-high"
     _attr_native_min_value = 1
     _attr_native_max_value = 100
