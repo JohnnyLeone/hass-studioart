@@ -8,6 +8,7 @@ from typing import Any
 
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant, callback
+from homeassistant.helpers.debounce import Debouncer
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
 from .api import RevoxError, RevoxState, RevoxStudioArtClient, merge_state
@@ -25,6 +26,10 @@ class RevoxCoordinator(DataUpdateCoordinator[RevoxState]):
             _LOGGER,
             name=f"{DOMAIN} {entry.data.get('host')}",
             update_interval=timedelta(seconds=DEFAULT_SCAN_INTERVAL),
+            # pushes trigger confirming polls; keep them snappy but coalesced
+            request_refresh_debouncer=Debouncer(
+                hass, _LOGGER, cooldown=1.5, immediate=True
+            ),
         )
         self.client = client
         self.entry = entry
@@ -60,7 +65,8 @@ class RevoxCoordinator(DataUpdateCoordinator[RevoxState]):
             updated = merge_state(self.data, partial)
             if updated is not self.data:
                 self.async_set_updated_data(updated)
-                return
         if partial.get("_activity"):
-            # something happened that we cannot decode fully; poll soon
+            # a decoded push carries only part of the picture (e.g. the
+            # source id but not the play state) — always confirm with a
+            # debounced poll shortly after
             self.hass.async_create_task(self.async_request_refresh())

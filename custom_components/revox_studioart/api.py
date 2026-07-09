@@ -125,6 +125,7 @@ POWER_ACTION_RESTART = 2
 _EV_HANDSHAKE = 0x03
 _EV_SOURCE_A = 0x0A  # push: ASCII source id, e.g. "19"
 _EV_SOURCE_B = 0x32  # push: ASCII source id (sent alongside 0x0A)
+_EV_PLAY_STATE = 0x33  # push: ASCII play state (0 stopped, 1 playing, 2 paused)
 _EV_VOLUME = 0x40  # query; also pushed with the ASCII volume on changes
 _EV_SPEAKER_ACTIVE = 0x46  # push: "SPEAKER_ACTIVE,<source id>"
 _EV_CHANNEL_STATUS = 0x67
@@ -132,6 +133,8 @@ _EV_ASCII_CMD = 0x6A
 _EV_MIRROR = 0x70
 _EV_QUERY = 0xD0
 _EV_BT_EVENT = 0xD1  # push: e.g. "btdisconnect"
+_EV_SAMPLE_RATE = 0xE6  # push: ASCII sample rate when a stream starts ("48000")
+_EV_STREAM_START = 0xEE  # push: empty marker when a stream starts
 
 
 class RevoxError(Exception):
@@ -651,6 +654,10 @@ class RevoxStudioArtClient:
             return partial
         if op in (_EV_SOURCE_A, _EV_SOURCE_B) and text.isdigit():
             return {"source": int(text), "_activity": True}
+        if op == _EV_PLAY_STATE and text.isdigit():
+            return {"play_state": int(text), "_activity": True}
+        if op in (_EV_SAMPLE_RATE, _EV_STREAM_START):
+            return {"_activity": True}
         if op == _EV_SPEAKER_ACTIVE and "," in text:
             # "SPEAKER_ACTIVE,25"
             source = text.rsplit(",", 1)[-1]

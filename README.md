@@ -64,7 +64,8 @@ UTF-8 JSON object.
 | 2 | `0x30` | `0x31` | — | Preset list(?) | returned `[]` (all presets empty on the test device) |
 | 2 | `0x34` | `0x35` | `0x36` | **Loudness** ✓ | `0/1` — verified on a live speaker |
 | 2 | `0x37` | `0x38` | — | **Device status** | JSON: `SSID, MAC, RSSI, IP, SN, LS9, Kleernet, Controler, Name, Battery, STBY, volume, Brightness, UpdateMode, UpdateState, mcuType, AutoPowerOn, PowerOnSrc, netstate`. `RSSI` is a quality code, higher = worse: `2` = Good, `3` = Bad, `4` = Very bad (device-verified; `1` = Very good inferred) |
-| 2 | `0x3C` | `0x3D` | — | **Playback** | JSON: `{"source":1,"state":0,"volume":48}` — `state`: `0` = idle/stopped, `1` = playing (verified with an active AirPlay stream) |
+| 2 | `0x33` | ? | — | **Play state read** | sent by the app on connect; the state is pushed as event op `0x33` |
+| 2 | `0x3C` | `0x3D` | — | **Playback** | JSON: `{"source":1,"state":0,"volume":48}` — `state`: `0` = stopped/idle, `1` = playing, `2` = paused (verified with an active AirPlay stream) |
 | 2 | `0x41` | `0x42` | `0x43` | **Aux-In high sensitivity** ✓ | `0/1` — verified on a live speaker |
 | 2 | `0x47` | `0x48` | — | unknown flag | value `0` in capture |
 | 2 | `0x59`* | `0x5A` | `0x5B` | **Auto power on** | ack is JSON `{"AutoPowerOn":n}`; state also in device status |
@@ -122,6 +123,7 @@ carry a 16-bit checksum which can be ignored.
 |---|---|---|
 | `0x03` | c→s | subscribe/handshake (empty payload) |
 | `0x0A` / `0x32` | s→c | source changed push — payload is the ASCII source id (e.g. `"19"`) |
+| `0x33` | s→c | play-state push — ASCII `0` stopped, `1` playing, `2` paused (fires for AirPlay/Spotify too, enabling instant state in HA) |
 | `0x40` | c→s (`VV=0x01`) | volume query — reply payload is the ASCII volume; also pushed on volume changes |
 | `0x46` | s→c | `SPEAKER_ACTIVE,<source id>` push |
 | `0x67` | s→c | multi-room channel status push: `FREE,STEREO,<concurrent-SSID>` (pair-state, channel) |
@@ -129,6 +131,8 @@ carry a 16-bit checksum which can be ignored.
 | `0x70` | s→c | **mirror push**: wraps every binary frame the speaker *receives* on port 50007, from any client — sets carry the new value, so subscribers learn about every change instantly |
 | `0xD0` | c→s | ASCII query, e.g. `READ_fwdownload_xml` → `fwdownload_xml:http://update.revox.de/Studioproducts/A100ATMEL/fw_update.xml` |
 | `0xD1` | s→c | Bluetooth event push, e.g. `btdisconnect` |
+| `0xE6` | s→c | sample rate push when a stream starts, e.g. `48000` |
+| `0xEE` | s→c | empty stream-start marker |
 
 The integration keeps a persistent subscription on this channel: when you flip
 a toggle in the StudioART app, the mirrored set frame updates the Home

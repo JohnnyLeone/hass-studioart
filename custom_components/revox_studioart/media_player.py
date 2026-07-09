@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import time
 
 from homeassistant.components.media_player import (
     MediaPlayerDeviceClass,
@@ -56,22 +57,28 @@ class RevoxMediaPlayer(RevoxEntity, MediaPlayerEntity):
         self._attr_unique_id = f"{self._unique_base}_media_player"
         self._last_source: str | None = None
         self._volume_before_mute: int | None = None
-        # optimistic state shown between a play/pause command and the
-        # confirming poll (the speaker needs a moment to transition)
+        # optimistic state shown after a play/pause command until the device
+        # confirms it (push or poll) or the deadline passes — streaming
+        # sources can take a few seconds to actually transition
         self._pending_state: MediaPlayerState | None = None
+        self._pending_until = 0.0
 
     @property
     def state(self) -> MediaPlayerState:
         st = self.coordinator.data
         if st is None or not st.available:
             return MediaPlayerState.OFF
-        if self._pending_state is not None:
-            return self._pending_state
         # NB: the device's STBY flag is 1 even while actively playing, so it
-        # cannot be used for the power state. state 1 = playing (verified).
-        if st.play_state and st.play_state != 0:
-            return MediaPlayerState.PLAYING
-        return MediaPlayerState.IDLE
+        # cannot be used for the power state. Play states (verified):
+        # 0 = stopped/idle, 1 = playing, 2 = paused.
+        actual = {1: MediaPlayerState.PLAYING, 2: MediaPlayerState.PAUSED}.get(
+            st.play_state or 0, MediaPlayerState.IDLE
+        )
+        if self._pending_state is not None:
+            if actual == self._pending_state or time.monotonic() >= self._pending_until:
+                return actual  # confirmed, or the device never followed
+            return self._pending_state
+        return actual
 
     @property
     def volume_level(self) -> float | None:
@@ -151,16 +158,21 @@ class RevoxMediaPlayer(RevoxEntity, MediaPlayerEntity):
             )
 
     async def _play_pause(self, playing: bool) -> None:
-        """Send play/pause, show the target state at once, confirm shortly."""
+        """Send play/pause and show the target state until confirmed.
+
+        The optimistic state sticks until the device reports it (play-state
+        pushes usually confirm within a second or two) or the deadline
+        passes, so an early poll cannot flip the UI back and forth.
+        """
         self._pending_state = (
-            MediaPlayerState.PLAYING if playing else MediaPlayerState.IDLE
+            MediaPlayerState.PLAYING if playing else MediaPlayerState.PAUSED
         )
+        self._pending_until = time.monotonic() + 6.0
         self.async_write_ha_state()
         client = self.coordinator.client
         await (client.play() if playing else client.pause())
-        # give the speaker a moment to transition, then read the real state
+        # confirming poll; further confirmation arrives via pushes
         await asyncio.sleep(1.0)
-        self._pending_state = None
         await self.coordinator.async_refresh()
 
     async def async_media_play(self) -> None:
