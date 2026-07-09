@@ -375,10 +375,15 @@ class RevoxStudioArtClient:
         # channel/pair state only arrive via 0x67 pushes — carry them over
         st.channel = self._push_cache.get("channel")
         st.pair_state = self._push_cache.get("pair_state")
-        # a fresh play-state push outranks the (lagging) playback JSON
+        # A fresh play-state push outranks the (lagging) playback JSON.
+        # Asymmetric window: on *pause* the JSON lags a couple of seconds
+        # behind the push, but on *play start* the speaker pushes a stale
+        # "stopped" and never pushes "playing" (the JSON leads there), so
+        # only a paused push may pin the state for long.
         if self._play_state_push is not None:
             value, when = self._play_state_push
-            if time.monotonic() - when < 3.0:
+            window = 3.0 if value == 2 else 1.5
+            if time.monotonic() - when < window:
                 st.play_state = value
         return st
 

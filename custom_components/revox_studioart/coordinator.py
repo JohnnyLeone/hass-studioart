@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from datetime import timedelta
 from typing import Any
@@ -33,6 +34,7 @@ class RevoxCoordinator(DataUpdateCoordinator[RevoxState]):
         )
         self.client = client
         self.entry = entry
+        self._burst_task: asyncio.Task | None = None
 
     async def _async_update_data(self) -> RevoxState:
         try:
@@ -51,6 +53,9 @@ class RevoxCoordinator(DataUpdateCoordinator[RevoxState]):
         self.client.start_events(self._handle_push)
 
     async def async_stop_events(self) -> None:
+        if self._burst_task is not None:
+            self._burst_task.cancel()
+            self._burst_task = None
         await self.client.stop_events()
 
     @callback
@@ -70,3 +75,14 @@ class RevoxCoordinator(DataUpdateCoordinator[RevoxState]):
             # source id but not the play state) — always confirm with a
             # debounced poll shortly after
             self.hass.async_create_task(self.async_request_refresh())
+            # ...and again a little later: on stream start the playback
+            # JSON flips to "playing" only ~2-3 s after the push markers
+            if self._burst_task is None or self._burst_task.done():
+                self._burst_task = self.hass.async_create_task(
+                    self._async_burst_refresh()
+                )
+
+    async def _async_burst_refresh(self) -> None:
+        for _ in range(2):
+            await asyncio.sleep(2.0)
+            await self.async_request_refresh()
