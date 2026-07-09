@@ -19,7 +19,7 @@ within a second via the speaker's push channel.
 
 | Entity | Function | Backing command | Confidence |
 |---|---|---|---|
-| `media_player` | Power (standby), volume, mute, source, play/pause, play URL | ASCII `cmd …` + binary status reads | High |
+| `media_player` | Volume, mute, source, play/pause, play URL | binary + ASCII `cmd …` commands, status reads and pushes | High |
 | `switch` Aux-In trigger | Auto-switch to Aux when analog signal present | binary set `0x9E` **inverted** ("disable auto aux"), state = Kleernet `DisAutoAux` | **Verified on a live speaker** |
 | `switch` Aux-In trigger high sensitivity | Boosts the analog input signal | binary get `0x41` / set `0x43` | **Verified on a live speaker** |
 | `switch` Loudness | Bass lift at low volume | binary get `0x34` / set `0x36` | **Verified on a live speaker** |
@@ -208,8 +208,10 @@ mirror pushes, so flip things in the StudioART app and read off the
 
 ## Notes & caveats
 
-- **Power on**: there's no dedicated "wake" command; the integration starts
-  playback to bring the speaker out of standby. `turn_off` sends `cmd timerstandby`.
+- **No power button**: the speaker has no usable power state (see `STBY`
+  below) and no wake command, so the media player deliberately has no
+  turn on/off. Standby can still be triggered via the
+  `revox_studioart.send_command` service (`ascii: timerstandby`).
 - **Optimistic fallbacks**: Bass boost and Max-volume aren't reported by the
   speaker, so their HA state reflects the last command sent. Loudness and
   Channel show device state as soon as the first poll/push confirms it.
