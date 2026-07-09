@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+
 from homeassistant.components.media_player import (
     MediaPlayerDeviceClass,
     MediaPlayerEntity,
@@ -21,6 +23,8 @@ from .entity import RevoxEntity
 # documented ASCII sources. Names overlapping in both maps prefer the id.
 SOURCE_LIST: list[str] = sorted(set(SOURCE_IDS) | set(SOURCE_COMMANDS))
 
+# No TURN_ON/TURN_OFF: the speaker has no usable power state (STBY is 1 even
+# while playing) and no wake command, so a power button would do nothing.
 SUPPORT = (
     MediaPlayerEntityFeature.VOLUME_SET
     | MediaPlayerEntityFeature.VOLUME_STEP
@@ -28,8 +32,6 @@ SUPPORT = (
     | MediaPlayerEntityFeature.SELECT_SOURCE
     | MediaPlayerEntityFeature.PLAY
     | MediaPlayerEntityFeature.PAUSE
-    | MediaPlayerEntityFeature.TURN_ON
-    | MediaPlayerEntityFeature.TURN_OFF
     | MediaPlayerEntityFeature.PLAY_MEDIA
 )
 
@@ -54,12 +56,17 @@ class RevoxMediaPlayer(RevoxEntity, MediaPlayerEntity):
         self._attr_unique_id = f"{self._unique_base}_media_player"
         self._last_source: str | None = None
         self._volume_before_mute: int | None = None
+        # optimistic state shown between a play/pause command and the
+        # confirming poll (the speaker needs a moment to transition)
+        self._pending_state: MediaPlayerState | None = None
 
     @property
     def state(self) -> MediaPlayerState:
         st = self.coordinator.data
         if st is None or not st.available:
             return MediaPlayerState.OFF
+        if self._pending_state is not None:
+            return self._pending_state
         # NB: the device's STBY flag is 1 even while actively playing, so it
         # cannot be used for the power state. state 1 = playing (verified).
         if st.play_state and st.play_state != 0:
@@ -143,19 +150,24 @@ class RevoxMediaPlayer(RevoxEntity, MediaPlayerEntity):
                 self.coordinator.client.select_source(cmd)
             )
 
+    async def _play_pause(self, playing: bool) -> None:
+        """Send play/pause, show the target state at once, confirm shortly."""
+        self._pending_state = (
+            MediaPlayerState.PLAYING if playing else MediaPlayerState.IDLE
+        )
+        self.async_write_ha_state()
+        client = self.coordinator.client
+        await (client.play() if playing else client.pause())
+        # give the speaker a moment to transition, then read the real state
+        await asyncio.sleep(1.0)
+        self._pending_state = None
+        await self.coordinator.async_refresh()
+
     async def async_media_play(self) -> None:
-        await self.coordinator.async_command(self.coordinator.client.play())
+        await self._play_pause(True)
 
     async def async_media_pause(self) -> None:
-        await self.coordinator.async_command(self.coordinator.client.pause())
-
-    async def async_turn_off(self) -> None:
-        await self.coordinator.async_command(self.coordinator.client.standby())
-
-    async def async_turn_on(self) -> None:
-        # No dedicated "power on" command exists; starting playback wakes the
-        # speaker from standby.
-        await self.coordinator.async_command(self.coordinator.client.play())
+        await self._play_pause(False)
 
     async def async_play_media(
         self, media_type: str, media_id: str, **kwargs
