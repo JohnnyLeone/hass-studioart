@@ -82,6 +82,7 @@ import asyncio
 import json
 import logging
 import struct
+import time
 from collections.abc import Callable
 from dataclasses import dataclass, field, replace
 from typing import Any
@@ -240,6 +241,10 @@ class RevoxStudioArtClient:
         # values that only ever arrive as pushes (0x67 channel status); they
         # must survive polls, which would otherwise reset them to None
         self._push_cache: dict[str, Any] = {}
+        # last play-state push (value, monotonic timestamp): the playback
+        # JSON lags a second or two behind the 0x33 pushes, so a poll right
+        # after a push would report the *old* state and flap the UI
+        self._play_state_push: tuple[int, float] | None = None
 
     @property
     def host(self) -> str:
@@ -370,6 +375,11 @@ class RevoxStudioArtClient:
         # channel/pair state only arrive via 0x67 pushes — carry them over
         st.channel = self._push_cache.get("channel")
         st.pair_state = self._push_cache.get("pair_state")
+        # a fresh play-state push outranks the (lagging) playback JSON
+        if self._play_state_push is not None:
+            value, when = self._play_state_push
+            if time.monotonic() - when < 3.0:
+                st.play_state = value
         return st
 
     async def _optional_json(self, reader, writer, cmd_triplet) -> dict:
@@ -638,6 +648,8 @@ class RevoxStudioArtClient:
         for key in ("channel", "pair_state"):
             if key in partial:
                 self._push_cache[key] = partial[key]
+        if "play_state" in partial:
+            self._play_state_push = (partial["play_state"], time.monotonic())
         if self._event_callback is not None:
             self._event_callback(partial)
 
