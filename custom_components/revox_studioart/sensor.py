@@ -26,6 +26,16 @@ class RevoxSensorDescription(SensorEntityDescription):
     value: Callable[[RevoxState], object]
 
 
+# Wi-Fi quality code as shown by the app's "Signal Quality" field
+# (higher = worse; 1 = best, inferred).
+WIFI_QUALITY: dict[int, str] = {
+    1: "Very good",
+    2: "Good",
+    3: "Bad",
+    4: "Very bad",
+}
+
+
 SENSORS: tuple[RevoxSensorDescription, ...] = (
     RevoxSensorDescription(
         # the raw value 255 ("full / on mains") is normalized to 100 in api.py
@@ -44,12 +54,15 @@ SENSORS: tuple[RevoxSensorDescription, ...] = (
         value=lambda st: st.ssid,
     ),
     RevoxSensorDescription(
-        # The speaker reports RSSI as a 0-4 "bars" value, not dBm.
+        # The speaker reports a quality code, higher = worse. 2-4 were
+        # observed against the app's "Signal Quality" label; 1 is inferred.
         key="wifi_rssi",
-        name="Wi-Fi signal (bars)",
+        name="Wi-Fi signal quality",
+        device_class=SensorDeviceClass.ENUM,
+        options=list(WIFI_QUALITY.values()),
         icon="mdi:wifi",
         entity_category=EntityCategory.DIAGNOSTIC,
-        value=lambda st: st.rssi,
+        value=lambda st: WIFI_QUALITY.get(st.rssi),
     ),
     RevoxSensorDescription(
         key="ip",

@@ -220,6 +220,9 @@ class RevoxStudioArtClient:
         # throttled toggle reads (see _TOGGLE_POLL_INTERVAL)
         self._toggle_cache: dict[str, bool | None] = {}
         self._last_toggle_poll = 0.0
+        # values that only ever arrive as pushes (0x67 channel status); they
+        # must survive polls, which would otherwise reset them to None
+        self._push_cache: dict[str, Any] = {}
 
     @property
     def host(self) -> str:
@@ -347,6 +350,9 @@ class RevoxStudioArtClient:
         # Aux-In trigger is the inverse of "DisAutoAux" (verified on device)
         if st.dis_auto_aux is not None:
             st.aux_trigger = not st.dis_auto_aux
+        # channel/pair state only arrive via 0x67 pushes — carry them over
+        st.channel = self._push_cache.get("channel")
+        st.pair_state = self._push_cache.get("pair_state")
         return st
 
     async def _optional_json(self, reader, writer, cmd_triplet) -> dict:
@@ -606,6 +612,10 @@ class RevoxStudioArtClient:
         for key in ("loudness", "aux_high_sensitivity"):
             if key in partial:
                 self._toggle_cache[key] = partial[key]
+        # remember push-only values so the next poll does not lose them
+        for key in ("channel", "pair_state"):
+            if key in partial:
+                self._push_cache[key] = partial[key]
         if self._event_callback is not None:
             self._event_callback(partial)
 

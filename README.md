@@ -31,7 +31,7 @@ within a second via the speaker's push channel.
 | `select` Kleernet wireless band | Automatic / 2.4 / 5.2 / 5.8 GHz | binary set `0x9B`, state = Kleernet `D83Fre` | **Verified on a live speaker** |
 | `button` Restart | Reboot the speaker | binary `0x4D` value `2` | **Confirmed on the wire** |
 | `number` Max volume limit | Volume ceiling | ASCII `cmd maxvolume N` | Documented |
-| `sensor` | Battery, Wi-Fi SSID/RSSI, IP, brightness | binary status reads | **Confirmed on the wire** |
+| `sensor` | Battery, Wi-Fi SSID, Wi-Fi signal quality, IP, brightness | binary status reads | **Confirmed on the wire** |
 
 ## The protocol (reverse-engineered)
 
@@ -61,7 +61,7 @@ UTF-8 JSON object.
 |---|---|---|---|---|---|
 | 2 | `0x30` | `0x31` | — | unknown list | returned `[]` |
 | 2 | `0x34` | `0x35` | `0x36` | **Loudness** ✓ | `0/1` — verified on a live speaker |
-| 2 | `0x37` | `0x38` | — | **Device status** | JSON: `SSID, MAC, RSSI, IP, SN, LS9, Kleernet, Controler, Name, Battery, STBY, volume, Brightness, UpdateMode, UpdateState, mcuType, AutoPowerOn, PowerOnSrc, netstate` |
+| 2 | `0x37` | `0x38` | — | **Device status** | JSON: `SSID, MAC, RSSI, IP, SN, LS9, Kleernet, Controler, Name, Battery, STBY, volume, Brightness, UpdateMode, UpdateState, mcuType, AutoPowerOn, PowerOnSrc, netstate`. `RSSI` is a quality code, higher = worse: `2` = Good, `3` = Bad, `4` = Very bad (device-verified; `1` = Very good inferred) |
 | 2 | `0x3C` | `0x3D` | — | **Playback** | JSON: `{"source":1,"state":0,"volume":48}` |
 | 2 | `0x41` | `0x42` | `0x43` | **Aux-In high sensitivity** ✓ | `0/1` — verified on a live speaker |
 | 2 | `0x47` | `0x48` | — | unknown flag | value `0` in capture |
