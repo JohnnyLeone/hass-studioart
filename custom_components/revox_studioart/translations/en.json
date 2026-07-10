@@ -83,6 +83,14 @@
         "name": "Max volume limit"
       }
     },
+    "binary_sensor": {
+      "battery_charging": {
+        "name": "Battery charging"
+      },
+      "paired_battery_charging": {
+        "name": "Paired speaker battery charging"
+      }
+    },
     "button": {
       "restart": {
         "name": "Restart"

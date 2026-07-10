@@ -34,6 +34,7 @@ within a second via the speaker's push channel.
 | `sensor` Paired speaker (+ battery) | Name, serial, channel, volume and battery of the Kleernet client | multi-room JSON `paired[]` | **Confirmed on the wire** |
 | `number` Max volume limit | Volume ceiling | ASCII `cmd maxvolume N` | Documented |
 | `sensor` | Battery, Wi-Fi SSID, Wi-Fi signal quality, IP, brightness | binary status reads | **Confirmed on the wire** |
+| `binary_sensor` Battery charging (chief + paired) | Charging status (battery byte `254`) | binary status reads | **Verified on a live speaker** |
 
 ## The protocol (reverse-engineered)
 
@@ -235,8 +236,10 @@ mirror pushes, so flip things in the StudioART app and read off the
   it cannot indicate the power state. The media player derives playing/idle
   from the playback state and exposes the raw flag as the `standby_flag`
   attribute.
-- **Battery `255`** means "fully charged" (the official app shows 100%) and is
-  normalized to 100 by the integration.
+- **Battery byte**: `0-100` = state of charge, `254` = charging (the SoC is
+  not reported while charging — the app shows just "Charging"; the battery
+  sensor shows *unknown* and the charging binary sensor turns on), `255` =
+  fully charged / on mains (shown as 100%).
 - The **firmware version** is shown once, in the device information
   (`<LS9> / Controller <version>`, e.g. `V3957 / Controller V44`).
 - Verified against a packet capture and a live A100 running firmware

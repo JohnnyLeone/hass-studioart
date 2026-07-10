@@ -15,7 +15,7 @@ from homeassistant.const import PERCENTAGE, EntityCategory
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
-from .api import RevoxState
+from .api import RevoxState, parse_battery
 from .const import DOMAIN
 from .coordinator import RevoxCoordinator
 from .entity import RevoxEntity
@@ -180,6 +180,6 @@ class RevoxPairedBatterySensor(RevoxPairedBase):
         paired = self._paired
         if not paired:
             return None
-        battery = paired.get("battery")
-        # 255 = fully charged / on mains, like the chief speaker
-        return 100 if battery == 255 else battery
+        # same encoding as the chief: 254 = charging (SoC unknown), 255 = full
+        soc, _charging = parse_battery(paired.get("battery"))
+        return soc

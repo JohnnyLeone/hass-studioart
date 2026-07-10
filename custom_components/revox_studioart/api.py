@@ -160,7 +160,8 @@ class RevoxState:
     firmware_ls9: str | None = None
     firmware_kleernet: str | None = None
     firmware_controller: str | None = None
-    battery: int | None = None
+    battery: int | None = None  # SoC %, None while charging (SoC not reported)
+    battery_charging: bool | None = None
     standby: bool | None = None
     volume: int | None = None
     brightness: int | None = None
@@ -229,6 +230,21 @@ def _as_bool(value: Any) -> bool | None:
     if value is None:
         return None
     return bool(value)
+
+
+def parse_battery(raw: int | None) -> tuple[int | None, bool | None]:
+    """Decode the battery byte into (SoC percent, charging).
+
+    0-100 = state of charge, 254 = charging (the SoC is not reported while
+    charging — the app shows just "Charging"), 255 = fully charged / on mains.
+    """
+    if raw is None:
+        return None, None
+    if raw == 254:
+        return None, True
+    if raw == 255:
+        return 100, False
+    return raw, False
 
 
 class RevoxStudioArtClient:
@@ -402,9 +418,7 @@ class RevoxStudioArtClient:
         st.firmware_ls9 = dev.get("LS9")
         st.firmware_kleernet = dev.get("Kleernet")
         st.firmware_controller = dev.get("Controler")  # note: firmware spelling
-        # 255 means "fully charged / on mains" — the official app shows 100%
-        battery = dev.get("Battery")
-        st.battery = 100 if battery == 255 else battery
+        st.battery, st.battery_charging = parse_battery(dev.get("Battery"))
         st.standby = _as_bool(dev.get("STBY"))
         st.volume = dev.get("volume", play.get("volume"))
         st.brightness = dev.get("Brightness")
