@@ -56,6 +56,9 @@
       }
     },
     "sensor": {
+      "battery": {
+        "name": "Battery"
+      },
       "wifi_ssid": {
         "name": "Wi-Fi SSID"
       },
@@ -81,8 +84,11 @@
       }
     },
     "button": {
-      "identify_paired": {
-        "name": "Identify paired speaker"
+      "restart": {
+        "name": "Restart"
+      },
+      "check_p100": {
+        "name": "Check P100"
       }
     }
   }

@@ -39,8 +39,10 @@ WIFI_QUALITY: dict[int, str] = {
 SENSORS: tuple[RevoxSensorDescription, ...] = (
     RevoxSensorDescription(
         # the raw value 255 ("full / on mains") is normalized to 100 in api.py;
-        # the name comes from the battery device class
+        # explicit name — the device-class name would be localized, while all
+        # entities carry the app's original (English) labels
         key="battery",
+        translation_key="battery",
         device_class=SensorDeviceClass.BATTERY,
         native_unit_of_measurement=PERCENTAGE,
         entity_category=EntityCategory.DIAGNOSTIC,

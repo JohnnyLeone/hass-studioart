@@ -114,8 +114,8 @@ SET_DIS_AUTO_AUX = (2, 0x9E)  # 1 = Aux-In trigger OFF (inverted)
 # power action command (request/reply, not a settings triplet)
 CMD_POWER_ACTION = (2, 0x4D)
 POWER_ACTION_RESTART = 2
-# "Check P100": fire-and-forget identify of the paired speaker
-CMD_IDENTIFY_PAIRED = (3, 0x0F)
+# "Check P100": fire-and-forget probe for a wired P100 partner speaker
+CMD_CHECK_P100 = (3, 0x0F)
 
 # Event channel opcodes
 _EV_HANDSHAKE = 0x03
@@ -592,10 +592,10 @@ class RevoxStudioArtClient:
         """Reboot the speaker (power action 0x4D, value 2)."""
         await self.async_set_bin(*CMD_POWER_ACTION, POWER_ACTION_RESTART)
 
-    async def identify_paired_speaker(self) -> None:
-        """"Check P100" (group 3 / 0x0F): the paired speaker identifies
-        itself audibly/visibly. No reply is sent on the wire."""
-        await self._oneshot(_build_frame(*CMD_IDENTIFY_PAIRED), read_ack_frame=True)
+    async def check_p100(self) -> None:
+        """"Check P100" (group 3 / 0x0F): probe whether a wired P100 partner
+        speaker is connected to the A100. No reply is sent on the wire."""
+        await self._oneshot(_build_frame(*CMD_CHECK_P100), read_ack_frame=True)
 
     async def set_channel(self, channel_cmd: str) -> None:
         """SETSTEREO / SETLEFT / SETRIGHT — via the event channel like the app.

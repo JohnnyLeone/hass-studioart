@@ -18,7 +18,7 @@ async def async_setup_entry(
 ) -> None:
     coordinator: RevoxCoordinator = hass.data[DOMAIN][entry.entry_id]
     async_add_entities(
-        [RevoxRestartButton(coordinator), RevoxIdentifyPairedButton(coordinator)]
+        [RevoxRestartButton(coordinator), RevoxCheckP100Button(coordinator)]
     )
 
 
@@ -29,7 +29,9 @@ class RevoxRestartButton(RevoxEntity, ButtonEntity):
     (it drops off the network for a short while).
     """
 
-    # the restart device class provides the entity name
+    # explicit name: the device-class name would be localized by HA, while
+    # all other entities carry the app's original (English) labels
+    _attr_translation_key = "restart"
     _attr_device_class = ButtonDeviceClass.RESTART
     _attr_entity_category = EntityCategory.CONFIG
 
@@ -41,25 +43,23 @@ class RevoxRestartButton(RevoxEntity, ButtonEntity):
         await self.coordinator.client.restart()
 
 
-class RevoxIdentifyPairedButton(RevoxEntity, ButtonEntity):
-    """"Check P100" in the app: the paired speaker identifies itself.
+class RevoxCheckP100Button(RevoxEntity, ButtonEntity):
+    """"Check P100" in the app: probe whether a wired P100 partner speaker
+    is connected to the A100.
 
-    Sends group 3 / 0x0F (confirmed on the wire, no reply). Only available
-    while a client speaker is paired.
+    Sends group 3 / 0x0F (confirmed on the wire, no reply). Independent of
+    Kleernet pairing — the P100 is a wired passive speaker.
     """
 
-    _attr_translation_key = "identify_paired"
-    _attr_device_class = ButtonDeviceClass.IDENTIFY
+    _attr_translation_key = "check_p100"
+    _attr_icon = "mdi:speaker"
     _attr_entity_category = EntityCategory.DIAGNOSTIC
 
     def __init__(self, coordinator: RevoxCoordinator) -> None:
         super().__init__(coordinator)
+        # unique_id kept from the earlier "identify paired" incarnation so
+        # the registry entry (and history) survives the rename
         self._attr_unique_id = f"{self._unique_base}_identify_paired"
 
-    @property
-    def available(self) -> bool:
-        st = self.coordinator.data
-        return super().available and bool(st and st.paired)
-
     async def async_press(self) -> None:
-        await self.coordinator.client.identify_paired_speaker()
+        await self.coordinator.client.check_p100()
