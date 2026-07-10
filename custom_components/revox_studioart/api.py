@@ -257,6 +257,10 @@ class RevoxStudioArtClient:
         self._play_state_push: tuple[int, float] | None = None
         # last position push (ms, epoch seconds)
         self._media_position: tuple[int, float] | None = None
+        # last volume push (value, monotonic timestamp): during a volume ramp
+        # the device JSON trails the pushes by a few hundred ms, so polls in
+        # between would make the slider jump backwards
+        self._volume_push: tuple[int, float] | None = None
 
     @property
     def host(self) -> str:
@@ -433,6 +437,12 @@ class RevoxStudioArtClient:
         st.media_duration_ms = self._push_cache.get("media_duration_ms")
         if self._media_position is not None:
             st.media_position_ms, st.media_position_ts = self._media_position
+        # A fresh volume push outranks the (trailing) JSON; each push renews
+        # the window, so during a ramp the pushes rule continuously.
+        if self._volume_push is not None:
+            value, when = self._volume_push
+            if time.monotonic() - when < 2.0:
+                st.volume = value
         # A fresh play-state push outranks the (lagging) playback JSON.
         if self._play_state_push is not None:
             value, when = self._play_state_push
@@ -527,7 +537,9 @@ class RevoxStudioArtClient:
     # -- convenience controls ---------------------------------------------
     async def set_volume(self, volume: int) -> None:
         # binary volume set as used by the app's Play tab
-        await self.async_set_bin(*SET_VOLUME, max(0, min(100, int(volume))))
+        value = max(0, min(100, int(volume)))
+        await self.async_set_bin(*SET_VOLUME, value)
+        self._volume_push = (value, time.monotonic())
 
     async def volume_up(self) -> None:
         await self.async_send_cmd("volup")
@@ -741,6 +753,8 @@ class RevoxStudioArtClient:
                 self._push_cache[key] = partial[key]
         if "play_state" in partial:
             self._play_state_push = (partial["play_state"], time.monotonic())
+        if "volume" in partial:
+            self._volume_push = (partial["volume"], time.monotonic())
         if self._event_callback is not None:
             self._event_callback(partial)
 
