@@ -9,6 +9,7 @@ from homeassistant.components.sensor import (
     SensorDeviceClass,
     SensorEntity,
     SensorEntityDescription,
+    SensorStateClass,
 )
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import PERCENTAGE, EntityCategory
@@ -111,15 +112,18 @@ class RevoxSensor(RevoxEntity, SensorEntity):
 
 
 class RevoxBatterySensor(RevoxEntity, SensorEntity):
-    """Battery like the app shows it: the SoC, or "Charging".
+    """Battery state of charge with statistics.
 
-    Deliberately no battery device class or % unit: the speaker does not
-    report a state of charge while charging, and HA only allows the textual
-    "Charging" state on a unit-less sensor. The trade-off is no long-term
-    statistics for this sensor.
+    Numeric so HA can graph it and build long-term statistics. While
+    charging the speaker reports no SoC (the sensor is unknown), but the
+    icon shows the charging bolt, a ``charging`` attribute is set, and the
+    battery-charging binary sensor mirrors the app's "Charging" status.
     """
 
     _attr_translation_key = "battery"
+    _attr_device_class = SensorDeviceClass.BATTERY
+    _attr_native_unit_of_measurement = PERCENTAGE
+    _attr_state_class = SensorStateClass.MEASUREMENT
     _attr_entity_category = EntityCategory.DIAGNOSTIC
 
     def __init__(self, coordinator: RevoxCoordinator) -> None:
@@ -134,11 +138,8 @@ class RevoxBatterySensor(RevoxEntity, SensorEntity):
         return st.battery, st.battery_charging
 
     @property
-    def native_value(self) -> int | str | None:
-        soc, charging = self._battery
-        if charging:
-            return "Charging"
-        return soc
+    def native_value(self) -> int | None:
+        return self._battery[0]
 
     @property
     def icon(self) -> str:
@@ -200,10 +201,12 @@ class RevoxPairedSpeakerSensor(RevoxPairedBase):
 
 
 class RevoxPairedBatterySensor(RevoxPairedBase):
-    """Battery of the paired client speaker — SoC, or "Charging" (see
-    RevoxBatterySensor for why there is no battery device class)."""
+    """Battery SoC of the paired client speaker (see RevoxBatterySensor)."""
 
     _attr_translation_key = "paired_speaker_battery"
+    _attr_device_class = SensorDeviceClass.BATTERY
+    _attr_native_unit_of_measurement = PERCENTAGE
+    _attr_state_class = SensorStateClass.MEASUREMENT
 
     def __init__(self, coordinator: RevoxCoordinator) -> None:
         super().__init__(coordinator)
@@ -218,11 +221,8 @@ class RevoxPairedBatterySensor(RevoxPairedBase):
         return parse_battery(paired.get("battery"))
 
     @property
-    def native_value(self) -> int | str | None:
-        soc, charging = self._battery
-        if charging:
-            return "Charging"
-        return soc
+    def native_value(self) -> int | None:
+        return self._battery[0]
 
     @property
     def icon(self) -> str:
