@@ -237,9 +237,11 @@ mirror pushes, so flip things in the StudioART app and read off the
   from the playback state and exposes the raw flag as the `standby_flag`
   attribute.
 - **Battery byte**: `0-100` = state of charge, `254` = charging (the SoC is
-  not reported while charging — the app shows just "Charging"; the battery
-  sensor shows *unknown* and the charging binary sensor turns on), `255` =
-  fully charged / on mains (shown as 100%).
+  not reported while charging), `255` = fully charged / on mains (shown as
+  100). The battery sensors show the SoC or `Charging`, exactly like the app;
+  because of the textual state they carry no `%` unit and no long-term
+  statistics. Boolean *battery charging* binary sensors exist for automations
+  (disabled by default).
 - The **firmware version** is shown once, in the device information
   (`<LS9> / Controller <version>`, e.g. `V3957 / Controller V44`).
 - Verified against a packet capture and a live A100 running firmware

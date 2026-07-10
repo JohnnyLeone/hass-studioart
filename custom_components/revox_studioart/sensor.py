@@ -14,6 +14,7 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import PERCENTAGE, EntityCategory
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
+from homeassistant.helpers.icon import icon_for_battery_level
 
 from .api import RevoxState, parse_battery
 from .const import DOMAIN
@@ -37,17 +38,6 @@ WIFI_QUALITY: dict[int, str] = {
 
 
 SENSORS: tuple[RevoxSensorDescription, ...] = (
-    RevoxSensorDescription(
-        # the raw value 255 ("full / on mains") is normalized to 100 in api.py;
-        # explicit name — the device-class name would be localized, while all
-        # entities carry the app's original (English) labels
-        key="battery",
-        translation_key="battery",
-        device_class=SensorDeviceClass.BATTERY,
-        native_unit_of_measurement=PERCENTAGE,
-        entity_category=EntityCategory.DIAGNOSTIC,
-        value=lambda st: st.battery,
-    ),
     RevoxSensorDescription(
         key="wifi_ssid",
         translation_key="wifi_ssid",
@@ -95,7 +85,11 @@ async def async_setup_entry(
         RevoxSensor(coordinator, desc) for desc in SENSORS
     ]
     entities.extend(
-        [RevoxPairedSpeakerSensor(coordinator), RevoxPairedBatterySensor(coordinator)]
+        [
+            RevoxBatterySensor(coordinator),
+            RevoxPairedSpeakerSensor(coordinator),
+            RevoxPairedBatterySensor(coordinator),
+        ]
     )
     async_add_entities(entities)
 
@@ -114,6 +108,47 @@ class RevoxSensor(RevoxEntity, SensorEntity):
         if st is None:
             return None
         return self.entity_description.value(st)
+
+
+class RevoxBatterySensor(RevoxEntity, SensorEntity):
+    """Battery like the app shows it: the SoC, or "Charging".
+
+    Deliberately no battery device class or % unit: the speaker does not
+    report a state of charge while charging, and HA only allows the textual
+    "Charging" state on a unit-less sensor. The trade-off is no long-term
+    statistics for this sensor.
+    """
+
+    _attr_translation_key = "battery"
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+
+    def __init__(self, coordinator: RevoxCoordinator) -> None:
+        super().__init__(coordinator)
+        self._attr_unique_id = f"{self._unique_base}_battery"
+
+    @property
+    def _battery(self) -> tuple[int | None, bool | None]:
+        st = self.coordinator.data
+        if st is None:
+            return None, None
+        return st.battery, st.battery_charging
+
+    @property
+    def native_value(self) -> int | str | None:
+        soc, charging = self._battery
+        if charging:
+            return "Charging"
+        return soc
+
+    @property
+    def icon(self) -> str:
+        soc, charging = self._battery
+        return icon_for_battery_level(soc, bool(charging))
+
+    @property
+    def extra_state_attributes(self) -> dict:
+        _soc, charging = self._battery
+        return {"charging": charging}
 
 
 class RevoxPairedBase(RevoxEntity, SensorEntity):
@@ -165,21 +200,36 @@ class RevoxPairedSpeakerSensor(RevoxPairedBase):
 
 
 class RevoxPairedBatterySensor(RevoxPairedBase):
-    """Battery of the paired client speaker."""
+    """Battery of the paired client speaker — SoC, or "Charging" (see
+    RevoxBatterySensor for why there is no battery device class)."""
 
     _attr_translation_key = "paired_speaker_battery"
-    _attr_device_class = SensorDeviceClass.BATTERY
-    _attr_native_unit_of_measurement = PERCENTAGE
 
     def __init__(self, coordinator: RevoxCoordinator) -> None:
         super().__init__(coordinator)
         self._attr_unique_id = f"{self._unique_base}_paired_battery"
 
     @property
-    def native_value(self) -> int | None:
+    def _battery(self) -> tuple[int | None, bool | None]:
         paired = self._paired
         if not paired:
-            return None
+            return None, None
         # same encoding as the chief: 254 = charging (SoC unknown), 255 = full
-        soc, _charging = parse_battery(paired.get("battery"))
+        return parse_battery(paired.get("battery"))
+
+    @property
+    def native_value(self) -> int | str | None:
+        soc, charging = self._battery
+        if charging:
+            return "Charging"
         return soc
+
+    @property
+    def icon(self) -> str:
+        soc, charging = self._battery
+        return icon_for_battery_level(soc, bool(charging))
+
+    @property
+    def extra_state_attributes(self) -> dict:
+        _soc, charging = self._battery
+        return {"charging": charging}

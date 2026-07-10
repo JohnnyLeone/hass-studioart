@@ -162,6 +162,7 @@ class RevoxMediaPlayer(RevoxEntity, MediaPlayerEntity):
             return {}
         return {
             "battery": st.battery,
+            "battery_charging": st.battery_charging,
             "standby_flag": st.standby,
             "wifi_ssid": st.ssid,
             "wifi_rssi": st.rssi,

@@ -30,11 +30,16 @@ async def async_setup_entry(
 
 
 class RevoxBatteryChargingSensor(RevoxEntity, BinarySensorEntity):
-    """Whether the speaker's battery is charging (battery byte 254)."""
+    """Whether the speaker's battery is charging (battery byte 254).
+
+    Disabled by default: the battery sensor itself shows "Charging" like the
+    app — this entity exists for automations that want a clean boolean.
+    """
 
     _attr_translation_key = "battery_charging"
     _attr_device_class = BinarySensorDeviceClass.BATTERY_CHARGING
     _attr_entity_category = EntityCategory.DIAGNOSTIC
+    _attr_entity_registry_enabled_default = False
 
     def __init__(self, coordinator: RevoxCoordinator) -> None:
         super().__init__(coordinator)
@@ -47,11 +52,15 @@ class RevoxBatteryChargingSensor(RevoxEntity, BinarySensorEntity):
 
 
 class RevoxPairedBatteryChargingSensor(RevoxEntity, BinarySensorEntity):
-    """Whether the paired client speaker's battery is charging."""
+    """Whether the paired client speaker's battery is charging.
+
+    Disabled by default, like the chief's charging sensor.
+    """
 
     _attr_translation_key = "paired_battery_charging"
     _attr_device_class = BinarySensorDeviceClass.BATTERY_CHARGING
     _attr_entity_category = EntityCategory.DIAGNOSTIC
+    _attr_entity_registry_enabled_default = False
 
     def __init__(self, coordinator: RevoxCoordinator) -> None:
         super().__init__(coordinator)
