@@ -239,9 +239,10 @@ mirror pushes, so flip things in the StudioART app and read off the
 - **Battery byte**: `0-100` = state of charge, `254` = charging (the SoC is
   not reported while charging), `255` = fully charged / on mains (shown as
   100%). The battery sensors are numeric with long-term statistics; while
-  charging they read *unknown* (there is genuinely no SoC), show the charging
-  bolt icon and set a `charging` attribute. The *battery charging* binary
-  sensors carry the app's "Charging" status.
+  charging (when there is genuinely no SoC on the wire) they hold the **last
+  known percentage** — kept across restarts — with the charging bolt icon, a
+  `charging` attribute and a `soc_is_last_known` flag. The *battery charging*
+  binary sensors carry the app's "Charging" status.
 - The **firmware version** is shown once, in the device information
   (`<LS9> / Controller <version>`, e.g. `V3957 / Controller V44`).
 - Verified against a packet capture and a live A100 running firmware
