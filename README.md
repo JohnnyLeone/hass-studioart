@@ -30,6 +30,8 @@ within a second via the speaker's push channel.
 | `select` Power-on source | Default source after manual power on | binary set `0x58`, state = `PowerOnSrc` | **Verified on a live speaker** (all indices) |
 | `select` Kleernet wireless band | Automatic / 2.4 / 5.2 / 5.8 GHz | binary set `0x9B`, state = Kleernet `D83Fre` | **Verified on a live speaker** |
 | `button` Restart | Reboot the speaker | binary `0x4D` value `2` | **Confirmed on the wire** |
+| `button` Identify paired speaker | "Check P100" — the paired speaker identifies itself | binary group 3 / `0x0F` | **Confirmed on the wire** |
+| `sensor` Paired speaker (+ battery) | Name, serial, channel, volume and battery of the Kleernet client | multi-room JSON `paired[]` | **Confirmed on the wire** |
 | `number` Max volume limit | Volume ceiling | ASCII `cmd maxvolume N` | Documented |
 | `sensor` | Battery, Wi-Fi SSID, Wi-Fi signal quality, IP, brightness | binary status reads | **Confirmed on the wire** |
 
@@ -77,7 +79,7 @@ UTF-8 JSON object.
 | 2 | — | `0x9D` | `0x9E` | **Disable auto aux** ✓ | `1` = Aux-In trigger **off** (inverted!) — verified on a live speaker; state = `DisAutoAux` in the Kleernet JSON |
 | 3 | `0x03` | `0x04` | — | **Multi-room state** | JSON: `{"state":2,"LRreverse":0,"paired":[{"type":"A100","name":"…","ID":"…","volume":48,"channel":1,"battery":255}]}` |
 | 3 | `0x56` | `0x57` | — | **Kleernet config** | JSON: `{"D83Fre":0,"DisAutoAux":0}` — `D83Fre` = wireless band, `DisAutoAux` = inverted Aux-In trigger. NB: same cmd numbers as the *group 2* power-on-source triplet — the group disambiguates |
-| 3 | `0x0F` | ? | — | sent for **Check P100** | no reply observed |
+| 3 | `0x0F` | — | — | **Check P100 / identify** ✓ | fire-and-forget: the paired speaker identifies itself; confirmed to send no reply |
 
 `*` = inferred from the triplet pattern, not yet observed on the wire.
 Beware: a first capture-only analysis mapped `0x36` to the Aux-In trigger and
@@ -207,8 +209,7 @@ mirror pushes, so flip things in the StudioART app and read off the
   been captured yet.
 - Other power-action values of `group 2, 0x4D` (value `2` = restart is
   confirmed; `Immediately` standby may be another value of the same command).
-- Pair/unpair flow ("Pair/Unpair Speaker → START") and `Check P100`
-  (`group 3, 0x0F`).
+- Pair/unpair flow ("Pair/Unpair Speaker → START") — not captured yet.
 - Firmware update trigger (the app reads the update XML URL via
   `READ_fwdownload_xml`; the XML was empty at the time of writing).
 
@@ -218,6 +219,12 @@ mirror pushes, so flip things in the StudioART app and read off the
   below) and no wake command, so the media player deliberately has no
   turn on/off. Standby can still be triggered via the
   `revox_studioart.send_command` service (`ascii: timerstandby`).
+- **Paired speaker settings** (e.g. its own max volume limit): the chief
+  speaker exposes no commands for configuring its client. But a paired A100
+  is a full speaker with its own IP and control port — add it as a second
+  device in this integration (it is auto-discovered) and set its max volume
+  limit, loudness etc. directly there. Settings the chief mirrors over
+  Kleernet (volume, channel) stay managed via the chief.
 - **Optimistic fallbacks**: Bass boost and Max-volume aren't reported by the
   speaker, so their HA state reflects the last command sent. Loudness and
   Channel show device state as soon as the first poll/push confirms it.

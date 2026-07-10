@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from homeassistant.const import CONF_HOST
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
@@ -16,7 +17,7 @@ class RevoxEntity(CoordinatorEntity[RevoxCoordinator]):
 
     def __init__(self, coordinator: RevoxCoordinator) -> None:
         super().__init__(coordinator)
-        self._host = coordinator.entry.data["host"]
+        self._host = coordinator.entry.data[CONF_HOST]
 
     @property
     def _unique_base(self) -> str:

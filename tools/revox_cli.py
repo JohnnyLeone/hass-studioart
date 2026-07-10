@@ -197,7 +197,7 @@ def event_ascii(host: str, text: str) -> None:
                 print(_fmt_event(op, status, payload))
                 if op == 0x6A:  # ack received
                     break
-        except socket.timeout:
+        except TimeoutError:
             pass
 
 
@@ -215,7 +215,7 @@ def event_query(host: str, text: str) -> None:
                 if op == 0xD0:
                     print(payload.decode("utf-8", "replace"))
                     return
-        except socket.timeout:
+        except TimeoutError:
             print("no reply")
 
 

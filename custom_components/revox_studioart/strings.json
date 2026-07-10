@@ -67,11 +67,22 @@
       },
       "brightness": {
         "name": "Display brightness"
+      },
+      "paired_speaker": {
+        "name": "Paired speaker"
+      },
+      "paired_speaker_battery": {
+        "name": "Paired speaker battery"
       }
     },
     "number": {
       "max_volume_limit": {
         "name": "Max volume limit"
+      }
+    },
+    "button": {
+      "identify_paired": {
+        "name": "Identify paired speaker"
       }
     }
   }

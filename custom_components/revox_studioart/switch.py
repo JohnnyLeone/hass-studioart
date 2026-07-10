@@ -18,12 +18,14 @@ from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
+from typing import Any
 
 from homeassistant.components.switch import SwitchEntity, SwitchEntityDescription
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import EntityCategory
+from homeassistant.const import STATE_ON, EntityCategory
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
+from homeassistant.helpers.restore_state import RestoreEntity
 
 from .api import RevoxState, RevoxStudioArtClient
 from .const import DOMAIN
@@ -120,15 +122,19 @@ class RevoxSwitch(RevoxEntity, SwitchEntity):
         )
         self.async_write_ha_state()
 
-    async def async_turn_on(self, **kwargs) -> None:
+    async def async_turn_on(self, **kwargs: Any) -> None:
         await self._set(True)
 
-    async def async_turn_off(self, **kwargs) -> None:
+    async def async_turn_off(self, **kwargs: Any) -> None:
         await self._set(False)
 
 
-class RevoxBassBoostSwitch(RevoxEntity, SwitchEntity):
-    """Bass boost via `cmd basssboost 0/1`. Optimistic (state not reported)."""
+class RevoxBassBoostSwitch(RevoxEntity, RestoreEntity, SwitchEntity):
+    """Bass boost via `cmd basssboost 0/1`.
+
+    The speaker does not report this setting, so the entity is optimistic
+    and restores its last known state across Home Assistant restarts.
+    """
 
     _attr_translation_key = "bass_boost"
     _attr_icon = "mdi:speaker"
@@ -138,16 +144,22 @@ class RevoxBassBoostSwitch(RevoxEntity, SwitchEntity):
         self._attr_unique_id = f"{self._unique_base}_bassboost"
         self._state = False
 
+    async def async_added_to_hass(self) -> None:
+        await super().async_added_to_hass()
+        if (last := await self.async_get_last_state()) is not None:
+            self._state = last.state == STATE_ON
+
     @property
     def is_on(self) -> bool:
         return self._state
 
-    async def async_turn_on(self, **kwargs) -> None:
-        await self.coordinator.client.set_bass_boost(True)
-        self._state = True
+    async def _set(self, on: bool) -> None:
+        await self.coordinator.client.set_bass_boost(on)
+        self._state = on
         self.async_write_ha_state()
 
-    async def async_turn_off(self, **kwargs) -> None:
-        await self.coordinator.client.set_bass_boost(False)
-        self._state = False
-        self.async_write_ha_state()
+    async def async_turn_on(self, **kwargs: Any) -> None:
+        await self._set(True)
+
+    async def async_turn_off(self, **kwargs: Any) -> None:
+        await self._set(False)

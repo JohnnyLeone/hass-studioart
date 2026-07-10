@@ -4,12 +4,11 @@ from __future__ import annotations
 
 import logging
 
+import homeassistant.helpers.config_validation as cv
 import voluptuous as vol
-
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_HOST, CONF_PORT, Platform
 from homeassistant.core import HomeAssistant, ServiceCall
-import homeassistant.helpers.config_validation as cv
 
 from .api import RevoxStudioArtClient
 from .const import DEFAULT_PORT, DOMAIN

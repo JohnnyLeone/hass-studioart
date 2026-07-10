@@ -55,7 +55,7 @@ Port 50007 — control. Carries two protocols simultaneously:
 
        cmd volume 50\r\n
 
-   Used here for volume, source, transport, power and DSP commands.
+   Used here for transport (play/pause), presets, max volume and standby.
 
 Port 7777 — event/push channel, message-framed:
 
@@ -64,21 +64,14 @@ Port 7777 — event/push channel, message-framed:
 
    ``VV`` is 0x02 for most ops (0x01 for the legacy volume query 0x40). The
    client sends the 4 crc bytes as zeros; the speaker fills a 16-bit checksum
-   which we do not need to verify. Observed ops:
-
-     0x03  handshake/subscribe (empty payload)
-     0x40  volume query (VV=0x01; reply payload is the ASCII volume)
-     0x67  multi-room channel status push: "FREE,STEREO,<concurrent-SSID>"
-     0x6A  send a bare ASCII command (SETSTEREO / SETLEFT / SETRIGHT)
-     0x70  mirror push: wraps every binary frame *received* by the speaker on
-           the control port (from any client) — sets carry the new value, so
-           subscribers learn about changes instantly
-     0xD0  ASCII query, e.g. "READ_fwdownload_xml" -> "fwdownload_xml:<url>"
+   which we do not need to verify. The observed opcodes are the ``_EV_*``
+   constants below; the full table with capture evidence lives in the README.
 """
 
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import logging
 import struct
@@ -121,6 +114,8 @@ SET_DIS_AUTO_AUX = (2, 0x9E)  # 1 = Aux-In trigger OFF (inverted)
 # power action command (request/reply, not a settings triplet)
 CMD_POWER_ACTION = (2, 0x4D)
 POWER_ACTION_RESTART = 2
+# "Check P100": fire-and-forget identify of the paired speaker
+CMD_IDENTIFY_PAIRED = (3, 0x0F)
 
 # Event channel opcodes
 _EV_HANDSHAKE = 0x03
@@ -286,10 +281,8 @@ class RevoxStudioArtClient:
     @staticmethod
     async def _close(writer: asyncio.StreamWriter) -> None:
         writer.close()
-        try:
+        with contextlib.suppress(OSError):
             await writer.wait_closed()
-        except OSError:
-            pass
 
     @staticmethod
     async def _read_frame(reader: asyncio.StreamReader) -> tuple[int, int, bytes]:
@@ -320,10 +313,26 @@ class RevoxStudioArtClient:
                 return payload
         raise RevoxError(f"no reply 0x{reply_cmd:02x} for 0x{req_cmd:02x}")
 
-    async def _request_json(self, reader, writer, group, req_cmd, reply_cmd) -> dict:
-        return _decode_json(await self._request(reader, writer, group, req_cmd, reply_cmd))
+    async def _request_json(
+        self,
+        reader: asyncio.StreamReader,
+        writer: asyncio.StreamWriter,
+        group: int,
+        req_cmd: int,
+        reply_cmd: int,
+    ) -> dict[str, Any]:
+        return _decode_json(
+            await self._request(reader, writer, group, req_cmd, reply_cmd)
+        )
 
-    async def _request_byte(self, reader, writer, group, req_cmd, reply_cmd) -> int | None:
+    async def _request_byte(
+        self,
+        reader: asyncio.StreamReader,
+        writer: asyncio.StreamWriter,
+        group: int,
+        req_cmd: int,
+        reply_cmd: int,
+    ) -> int | None:
         payload = await self._request(reader, writer, group, req_cmd, reply_cmd)
         return payload[0] if payload else None
 
@@ -338,24 +347,45 @@ class RevoxStudioArtClient:
                 multi = await self._optional_json(reader, writer, _CMD_MULTIROOM)
                 kleer = await self._optional_json(reader, writer, _CMD_KLEERNET)
                 timer = await self._optional_json(reader, writer, _CMD_STANDBY_TIMER)
-                now = asyncio.get_running_loop().time()
-                if (
-                    not self._toggle_cache
-                    or None in self._toggle_cache.values()
-                    or now - self._last_toggle_poll >= _TOGGLE_POLL_INTERVAL
-                ):
-                    loud = await self._optional_byte(reader, writer, _CMD_LOUDNESS)
-                    aux_hs = await self._optional_byte(
-                        reader, writer, _CMD_AUX_HIGH_SENS
-                    )
-                    self._toggle_cache = {
-                        "loudness": _as_bool(loud),
-                        "aux_high_sensitivity": _as_bool(aux_hs),
-                    }
-                    self._last_toggle_poll = now
+                await self._maybe_poll_toggles(reader, writer)
             finally:
                 await self._close(writer)
 
+        st = self._state_from_polls(dev, play, multi, kleer, timer)
+        self._overlay_pushed_values(st)
+        return st
+
+    async def _maybe_poll_toggles(
+        self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter
+    ) -> None:
+        """Refresh the loudness/high-sensitivity cache, at most once a minute.
+
+        See _TOGGLE_POLL_INTERVAL for why these two reads are throttled.
+        """
+        now = asyncio.get_running_loop().time()
+        if (
+            self._toggle_cache
+            and None not in self._toggle_cache.values()
+            and now - self._last_toggle_poll < _TOGGLE_POLL_INTERVAL
+        ):
+            return
+        loud = await self._optional_byte(reader, writer, _CMD_LOUDNESS)
+        aux_hs = await self._optional_byte(reader, writer, _CMD_AUX_HIGH_SENS)
+        self._toggle_cache = {
+            "loudness": _as_bool(loud),
+            "aux_high_sensitivity": _as_bool(aux_hs),
+        }
+        self._last_toggle_poll = now
+
+    def _state_from_polls(
+        self,
+        dev: dict[str, Any],
+        play: dict[str, Any],
+        multi: dict[str, Any],
+        kleer: dict[str, Any],
+        timer: dict[str, Any],
+    ) -> RevoxState:
+        """Build a state snapshot from the polled JSON documents."""
         st = RevoxState(
             raw={"device": dev, "playback": play, "multiroom": multi, "kleernet": kleer}
         )
@@ -391,6 +421,10 @@ class RevoxStudioArtClient:
         # Aux-In trigger is the inverse of "DisAutoAux" (verified on device)
         if st.dis_auto_aux is not None:
             st.aux_trigger = not st.dis_auto_aux
+        return st
+
+    def _overlay_pushed_values(self, st: RevoxState) -> None:
+        """Fold push-only values and fresh push overrides into ``st``."""
         # values that only arrive via pushes — carry them over polls
         st.channel = self._push_cache.get("channel")
         st.pair_state = self._push_cache.get("pair_state")
@@ -408,75 +442,87 @@ class RevoxStudioArtClient:
                 # (and right after the push briefly still reports 1). Hold
                 # paused unless the JSON shows real playback again or the
                 # push grows old.
-                if st.play_state == 1 and age < 3.0:
-                    st.play_state = 2
-                elif st.play_state != 1 and age < 30.0:
+                if st.play_state == 1 and age < 3.0 or st.play_state != 1 and age < 30.0:
                     st.play_state = 2
             elif age < 1.5:
                 st.play_state = value
-        return st
 
-    async def _optional_json(self, reader, writer, cmd_triplet) -> dict:
+    async def _optional_json(
+        self,
+        reader: asyncio.StreamReader,
+        writer: asyncio.StreamWriter,
+        cmd_triplet: tuple[int, int, int],
+    ) -> dict[str, Any]:
         try:
             return await self._request_json(reader, writer, *cmd_triplet)
         except (RevoxError, asyncio.TimeoutError, asyncio.IncompleteReadError):
             return {}
 
-    async def _optional_byte(self, reader, writer, cmd_triplet) -> int | None:
+    async def _optional_byte(
+        self,
+        reader: asyncio.StreamReader,
+        writer: asyncio.StreamWriter,
+        cmd_triplet: tuple[int, int, int],
+    ) -> int | None:
         try:
             return await self._request_byte(reader, writer, *cmd_triplet)
         except (RevoxError, asyncio.TimeoutError, asyncio.IncompleteReadError):
             return None
 
     # -- public API: control --------------------------------------------------
+    async def _oneshot(
+        self,
+        data: bytes,
+        *,
+        read_ascii_reply: bool = False,
+        read_ack_frame: bool = False,
+    ) -> str | None:
+        """Open a control connection, send ``data``, optionally read a reply.
+
+        Both reply styles are best-effort: the speaker does not acknowledge
+        every command, so missing replies are not an error.
+        """
+        async with self._lock:
+            reader, writer = await self._open()
+            try:
+                writer.write(data)
+                await writer.drain()
+                if read_ascii_reply:
+                    try:
+                        raw = await asyncio.wait_for(reader.read(256), timeout=1.5)
+                        return raw.decode("utf-8", "replace").strip()
+                    except (asyncio.TimeoutError, OSError):
+                        return None
+                if read_ack_frame:
+                    with contextlib.suppress(
+                        RevoxError, asyncio.TimeoutError, asyncio.IncompleteReadError
+                    ):
+                        await asyncio.wait_for(self._read_frame(reader), timeout=1.5)
+                else:
+                    # give the speaker a moment to act before dropping the socket
+                    await asyncio.sleep(0.05)
+                return None
+            finally:
+                await self._close(writer)
+
     async def async_send_cmd(self, command: str, expect_reply: bool = False) -> str | None:
         """Send an ASCII ``cmd ...`` control command.
 
         ``command`` is the text after ``cmd `` (e.g. ``"volume 50"``).
         """
-        line = f"cmd {command}\r\n".encode("utf-8")
-        async with self._lock:
-            reader, writer = await self._open()
-            try:
-                writer.write(line)
-                await writer.drain()
-                if expect_reply:
-                    try:
-                        data = await asyncio.wait_for(reader.read(256), timeout=1.5)
-                        return data.decode("utf-8", "replace").strip()
-                    except (asyncio.TimeoutError, OSError):
-                        return None
-                # give the speaker a moment to act before we drop the socket
-                await asyncio.sleep(0.05)
-                return None
-            finally:
-                await self._close(writer)
+        return await self._oneshot(
+            f"cmd {command}\r\n".encode(), read_ascii_reply=expect_reply
+        )
 
     async def async_set_bin(self, group: int, set_cmd: int, value: int) -> None:
         """Send a binary *set* command; the speaker acks with set_cmd - 1."""
-        async with self._lock:
-            reader, writer = await self._open()
-            try:
-                writer.write(_build_frame(group, set_cmd, bytes([value & 0xFF])))
-                await writer.drain()
-                # read the ack frame if the speaker sends one
-                try:
-                    await self._read_frame(reader)
-                except (RevoxError, asyncio.TimeoutError, asyncio.IncompleteReadError):
-                    pass
-            finally:
-                await self._close(writer)
+        await self._oneshot(
+            _build_frame(group, set_cmd, bytes([value & 0xFF])), read_ack_frame=True
+        )
 
     async def async_send_raw_ascii(self, text: str) -> None:
         """Send a bare ASCII line on the control port (fallback path)."""
-        async with self._lock:
-            reader, writer = await self._open()
-            try:
-                writer.write(f"{text}\r\n".encode("utf-8"))
-                await writer.drain()
-                await asyncio.sleep(0.05)
-            finally:
-                await self._close(writer)
+        await self._oneshot(f"{text}\r\n".encode())
 
     # -- convenience controls ---------------------------------------------
     async def set_volume(self, volume: int) -> None:
@@ -545,6 +591,11 @@ class RevoxStudioArtClient:
     async def restart(self) -> None:
         """Reboot the speaker (power action 0x4D, value 2)."""
         await self.async_set_bin(*CMD_POWER_ACTION, POWER_ACTION_RESTART)
+
+    async def identify_paired_speaker(self) -> None:
+        """"Check P100" (group 3 / 0x0F): the paired speaker identifies
+        itself audibly/visibly. No reply is sent on the wire."""
+        await self._oneshot(_build_frame(*CMD_IDENTIFY_PAIRED), read_ack_frame=True)
 
     async def set_channel(self, channel_cmd: str) -> None:
         """SETSTEREO / SETLEFT / SETRIGHT — via the event channel like the app.

@@ -19,6 +19,10 @@ from .const import (
 from .coordinator import RevoxCoordinator
 from .entity import RevoxEntity
 
+# reverse lookups: option label -> wire value
+_POWER_ON_SOURCE_TO_ID = {label: idx for idx, label in POWER_ON_SOURCE_OPTIONS.items()}
+_KLEERNET_BAND_TO_ID = {label: band for band, label in KLEERNET_BAND_OPTIONS.items()}
+
 
 async def async_setup_entry(
     hass: HomeAssistant, entry: ConfigEntry, async_add_entities: AddEntitiesCallback
@@ -99,12 +103,10 @@ class RevoxPowerOnSourceSelect(RevoxEntity, SelectEntity):
         return POWER_ON_SOURCE_OPTIONS.get(st.power_on_source)
 
     async def async_select_option(self, option: str) -> None:
-        for index, label in POWER_ON_SOURCE_OPTIONS.items():
-            if label == option:
-                await self.coordinator.async_command(
-                    self.coordinator.client.set_power_on_source(index)
-                )
-                return
+        if (index := _POWER_ON_SOURCE_TO_ID.get(option)) is not None:
+            await self.coordinator.async_command(
+                self.coordinator.client.set_power_on_source(index)
+            )
 
 
 class RevoxKleernetBandSelect(RevoxEntity, SelectEntity):
@@ -131,9 +133,7 @@ class RevoxKleernetBandSelect(RevoxEntity, SelectEntity):
         return KLEERNET_BAND_OPTIONS.get(st.kleernet_band)
 
     async def async_select_option(self, option: str) -> None:
-        for band, label in KLEERNET_BAND_OPTIONS.items():
-            if label == option:
-                await self.coordinator.async_command(
-                    self.coordinator.client.set_kleernet_band(band)
-                )
-                return
+        if (band := _KLEERNET_BAND_TO_ID.get(option)) is not None:
+            await self.coordinator.async_command(
+                self.coordinator.client.set_kleernet_band(band)
+            )

@@ -21,7 +21,9 @@ _LOGGER = logging.getLogger(__name__)
 class RevoxCoordinator(DataUpdateCoordinator[RevoxState]):
     """Polls the speaker and applies push updates from the event channel."""
 
-    def __init__(self, hass: HomeAssistant, entry: ConfigEntry, client: RevoxStudioArtClient) -> None:
+    def __init__(
+        self, hass: HomeAssistant, entry: ConfigEntry, client: RevoxStudioArtClient
+    ) -> None:
         super().__init__(
             hass,
             _LOGGER,

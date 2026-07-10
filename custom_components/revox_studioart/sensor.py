@@ -89,7 +89,13 @@ async def async_setup_entry(
     hass: HomeAssistant, entry: ConfigEntry, async_add_entities: AddEntitiesCallback
 ) -> None:
     coordinator: RevoxCoordinator = hass.data[DOMAIN][entry.entry_id]
-    async_add_entities(RevoxSensor(coordinator, desc) for desc in SENSORS)
+    entities: list[SensorEntity] = [
+        RevoxSensor(coordinator, desc) for desc in SENSORS
+    ]
+    entities.extend(
+        [RevoxPairedSpeakerSensor(coordinator), RevoxPairedBatterySensor(coordinator)]
+    )
+    async_add_entities(entities)
 
 
 class RevoxSensor(RevoxEntity, SensorEntity):
@@ -106,3 +112,72 @@ class RevoxSensor(RevoxEntity, SensorEntity):
         if st is None:
             return None
         return self.entity_description.value(st)
+
+
+class RevoxPairedBase(RevoxEntity, SensorEntity):
+    """Base for sensors describing the paired Kleernet client speaker."""
+
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+
+    @property
+    def _paired(self) -> dict | None:
+        st = self.coordinator.data
+        if st is None or not st.paired:
+            return None
+        return st.paired[0]
+
+    @property
+    def available(self) -> bool:
+        return super().available and self._paired is not None
+
+
+class RevoxPairedSpeakerSensor(RevoxPairedBase):
+    """Name and details of the paired client speaker (e.g. the stereo partner)."""
+
+    _attr_translation_key = "paired_speaker"
+    _attr_icon = "mdi:speaker-multiple"
+
+    def __init__(self, coordinator: RevoxCoordinator) -> None:
+        super().__init__(coordinator)
+        self._attr_unique_id = f"{self._unique_base}_paired_speaker"
+
+    @property
+    def native_value(self) -> str | None:
+        paired = self._paired
+        return paired.get("name") if paired else None
+
+    @property
+    def extra_state_attributes(self) -> dict:
+        paired = self._paired
+        if not paired:
+            return {}
+        st = self.coordinator.data
+        return {
+            "serial": paired.get("ID"),
+            "type": paired.get("type"),
+            "volume": paired.get("volume"),
+            "channel": paired.get("channel"),
+            "paired_count": len(st.paired) if st else None,
+            "all_paired": [p.get("name") for p in (st.paired if st else [])],
+        }
+
+
+class RevoxPairedBatterySensor(RevoxPairedBase):
+    """Battery of the paired client speaker."""
+
+    _attr_translation_key = "paired_speaker_battery"
+    _attr_device_class = SensorDeviceClass.BATTERY
+    _attr_native_unit_of_measurement = PERCENTAGE
+
+    def __init__(self, coordinator: RevoxCoordinator) -> None:
+        super().__init__(coordinator)
+        self._attr_unique_id = f"{self._unique_base}_paired_battery"
+
+    @property
+    def native_value(self) -> int | None:
+        paired = self._paired
+        if not paired:
+            return None
+        battery = paired.get("battery")
+        # 255 = fully charged / on mains, like the chief speaker
+        return 100 if battery == 255 else battery

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import time
+from typing import Any
 
 from homeassistant.components.media_player import (
     MediaPlayerDeviceClass,
@@ -235,9 +236,10 @@ class RevoxMediaPlayer(RevoxEntity, MediaPlayerEntity):
         await self._play_pause(False)
 
     async def async_play_media(
-        self, media_type: str, media_id: str, **kwargs
+        self, media_type: MediaType | str, media_id: str, **kwargs: Any
     ) -> None:
-        if media_type in (MediaType.URL, MediaType.MUSIC, "url", "audio/mp3"):
+        """Play a URL (e.g. a radio stream) via the documented `cmd url`."""
+        if media_id.startswith(("http://", "https://")):
             await self.coordinator.async_command(
                 self.coordinator.client.play_url(media_id)
             )
