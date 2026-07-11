@@ -19,7 +19,7 @@ within a second via the speaker's push channel.
 
 | Entity | Function | Backing command | Confidence |
 |---|---|---|---|
-| `media_player` | Volume, mute, source, play/pause, play URL, now-playing metadata (track/artist/album/cover/position) | binary + ASCII `cmd …` commands, status reads and pushes | High |
+| `media_player` | Volume, mute, source, play/pause, now-playing metadata (track/artist/album/cover/position), URL/TTS playback + media browser | binary + ASCII `cmd …` commands, status reads and pushes | High |
 | `switch` Aux-In trigger | Auto-switch to Aux when analog signal present | binary set `0x9E` **inverted** ("disable auto aux"), state = Kleernet `DisAutoAux` | **Verified on a live speaker** |
 | `switch` Aux-In trigger high sensitivity | Boosts the analog input signal | binary get `0x41` / set `0x43` | **Verified on a live speaker** |
 | `switch` Loudness | Bass lift at low volume | binary get `0x34` / set `0x36` | **Verified on a live speaker** |
@@ -213,6 +213,21 @@ mirror pushes, so flip things in the StudioART app and read off the
 - Pair/unpair flow ("Pair/Unpair Speaker → START") — not captured yet.
 - Firmware update trigger (the app reads the update XML URL via
   `READ_fwdownload_xml`; the XML was empty at the time of writing).
+
+## Text-to-speech / announcements
+
+The media player resolves `media-source://` references, so `tts.speak`
+(and playing files from the media browser) targets the speaker directly:
+Home Assistant serves the synthesized MP3 over HTTP and the speaker streams
+it via the documented `cmd url`. Requirements: the speaker must be able to
+reach your Home Assistant URL (Settings → System → Network), and the
+firmware's stream player must accept the format (MP3 from the default TTS
+engines; verify once with
+`python3 tools/revox_cli.py <ip> url "<http-mp3-url>"`).
+There is no announce/resume: playing a TTS message interrupts the current
+source like any other stream. Music Assistant users can alternatively route
+announcements through MA's AirPlay provider, which handles pause/resume
+itself.
 
 ## Notes & caveats
 

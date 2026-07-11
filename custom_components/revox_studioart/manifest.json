@@ -1,14 +1,14 @@
 {
   "domain": "revox_studioart",
   "name": "Revox STUDIOART",
-  "version": "0.9.3",
+  "version": "0.9.4",
   "config_flow": true,
   "documentation": "https://github.com/JohnnyLeone/hass-studioart",
   "issue_tracker": "https://github.com/JohnnyLeone/hass-studioart/issues",
   "codeowners": ["@JohnnyLeone"],
   "iot_class": "local_push",
   "integration_type": "device",
-  "dependencies": [],
+  "dependencies": ["media_source"],
   "requirements": [],
   "zeroconf": [
     {

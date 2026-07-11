@@ -6,12 +6,15 @@ import asyncio
 import time
 from typing import Any
 
+from homeassistant.components import media_source
 from homeassistant.components.media_player import (
+    BrowseMedia,
     MediaPlayerDeviceClass,
     MediaPlayerEntity,
     MediaPlayerEntityFeature,
     MediaPlayerState,
     MediaType,
+    async_process_play_media_url,
 )
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
@@ -36,6 +39,7 @@ SUPPORT = (
     | MediaPlayerEntityFeature.PLAY
     | MediaPlayerEntityFeature.PAUSE
     | MediaPlayerEntityFeature.PLAY_MEDIA
+    | MediaPlayerEntityFeature.BROWSE_MEDIA
 )
 
 
@@ -239,8 +243,29 @@ class RevoxMediaPlayer(RevoxEntity, MediaPlayerEntity):
     async def async_play_media(
         self, media_type: MediaType | str, media_id: str, **kwargs: Any
     ) -> None:
-        """Play a URL (e.g. a radio stream) via the documented `cmd url`."""
+        """Play a URL (radio stream, TTS announcement, local media, ...).
+
+        media-source references (e.g. from `tts.speak` or the media browser)
+        are resolved to the HTTP URL served by Home Assistant; the speaker
+        then streams it via the documented `cmd url`.
+        """
+        if media_source.is_media_source_id(media_id):
+            item = await media_source.async_resolve_media(media_id, self.entity_id)
+            media_id = item.url
+        media_id = async_process_play_media_url(self.hass, media_id)
         if media_id.startswith(("http://", "https://")):
             await self.coordinator.async_command(
                 self.coordinator.client.play_url(media_id)
             )
+
+    async def async_browse_media(
+        self,
+        media_content_type: MediaType | str | None = None,
+        media_content_id: str | None = None,
+    ) -> BrowseMedia:
+        """Browse Home Assistant media sources (TTS, local media, radio)."""
+        return await media_source.async_browse_media(
+            self.hass,
+            media_content_id,
+            content_filter=lambda item: item.media_content_type.startswith("audio/"),
+        )
