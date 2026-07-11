@@ -250,7 +250,9 @@ class RevoxMediaPlayer(RevoxEntity, MediaPlayerEntity):
         then streams it via the documented `cmd url`.
         """
         if media_source.is_media_source_id(media_id):
-            item = await media_source.async_resolve_media(media_id, self.entity_id)
+            item = await media_source.async_resolve_media(
+                self.hass, media_id, self.entity_id
+            )
             media_id = item.url
         media_id = async_process_play_media_url(self.hass, media_id)
         if media_id.startswith(("http://", "https://")):
