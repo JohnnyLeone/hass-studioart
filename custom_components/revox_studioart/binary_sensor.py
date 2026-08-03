@@ -6,21 +6,23 @@ from homeassistant.components.binary_sensor import (
     BinarySensorDeviceClass,
     BinarySensorEntity,
 )
-from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import EntityCategory
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .api import parse_battery
-from .const import DOMAIN
-from .coordinator import RevoxCoordinator
+from .coordinator import RevoxConfigEntry, RevoxCoordinator
 from .entity import RevoxEntity
+
+PARALLEL_UPDATES = 0
 
 
 async def async_setup_entry(
-    hass: HomeAssistant, entry: ConfigEntry, async_add_entities: AddEntitiesCallback
+    hass: HomeAssistant,
+    entry: RevoxConfigEntry,
+    async_add_entities: AddEntitiesCallback,
 ) -> None:
-    coordinator: RevoxCoordinator = hass.data[DOMAIN][entry.entry_id]
+    coordinator = entry.runtime_data
     async_add_entities(
         [
             RevoxBatteryChargingSensor(coordinator),

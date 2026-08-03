@@ -6,7 +6,7 @@ from homeassistant.const import CONF_HOST
 from homeassistant.helpers.device_registry import DeviceInfo
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
-from .const import DOMAIN, MANUFACTURER
+from .const import DEFAULT_NAME, DOMAIN, MANUFACTURER
 from .coordinator import RevoxCoordinator
 
 
@@ -17,12 +17,11 @@ class RevoxEntity(CoordinatorEntity[RevoxCoordinator]):
 
     def __init__(self, coordinator: RevoxCoordinator) -> None:
         super().__init__(coordinator)
-        self._host = coordinator.entry.data[CONF_HOST]
-
-    @property
-    def _unique_base(self) -> str:
-        st = self.coordinator.data
-        return (st.serial if st and st.serial else None) or self._host
+        self._host: str = coordinator.config_entry.data[CONF_HOST]
+        # entities are created after the first successful refresh, so the
+        # serial is normally known; the host is the legacy fallback
+        st = coordinator.data
+        self._unique_base: str = (st.serial if st and st.serial else None) or self._host
 
     @property
     def device_info(self) -> DeviceInfo:
@@ -43,7 +42,7 @@ class RevoxEntity(CoordinatorEntity[RevoxCoordinator]):
             connections=connections,
             manufacturer=MANUFACTURER,
             model="STUDIOART A100",
-            name=(st.name if st and st.name else None) or "STUDIOART Speaker",
+            name=(st.name if st and st.name else None) or DEFAULT_NAME,
             sw_version=sw_version,
             configuration_url=f"http://{self._host}",
         )

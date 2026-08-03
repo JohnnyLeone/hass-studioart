@@ -7,23 +7,13 @@ DOMAIN = "revox_studioart"
 # The STUDIOART control port. It speaks two protocols on the same TCP port:
 #   * a binary, length-prefixed request/response protocol (used for status reads)
 #   * an ASCII "cmd ...\r\n" telnet-style protocol (used for control)
+# The event/push channel (port 7777) lives in api.py.
 DEFAULT_PORT = 50007
-
-# Event/push channel. The speaker mirrors every command any client sends to
-# subscribers on this port, and it is also the channel the official app uses
-# for SETSTEREO/SETLEFT/SETRIGHT and READ_* queries.
-EVENT_PORT = 7777
 
 DEFAULT_NAME = "STUDIOART Speaker"
 MANUFACTURER = "Revox"
 
 DEFAULT_SCAN_INTERVAL = 10  # seconds
-CONNECT_TIMEOUT = 4.0
-SOCKET_TIMEOUT = 4.0
-
-# Config entry keys
-CONF_HOST = "host"
-CONF_PORT = "port"
 
 # ---------------------------------------------------------------------------
 # Sources. Two mechanisms exist:

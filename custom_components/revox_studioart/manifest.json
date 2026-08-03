@@ -1,15 +1,15 @@
 {
   "domain": "revox_studioart",
   "name": "Revox STUDIOART",
-  "version": "0.9.5",
-  "config_flow": true,
-  "documentation": "https://github.com/JohnnyLeone/hass-studioart",
-  "issue_tracker": "https://github.com/JohnnyLeone/hass-studioart/issues",
   "codeowners": ["@JohnnyLeone"],
-  "iot_class": "local_push",
-  "integration_type": "device",
+  "config_flow": true,
   "dependencies": ["media_source"],
+  "documentation": "https://github.com/JohnnyLeone/hass-studioart",
+  "integration_type": "device",
+  "iot_class": "local_push",
+  "issue_tracker": "https://github.com/JohnnyLeone/hass-studioart/issues",
   "requirements": [],
+  "version": "0.10.0",
   "zeroconf": [
     {
       "type": "_raop._tcp.local.",

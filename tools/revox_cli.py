@@ -29,6 +29,7 @@ Examples
     python3 revox_cli.py 192.168.42.163 readq READ_fwdownload_xml   # 0xD0 query
     python3 revox_cli.py 192.168.42.163 watch             # live push events (7777)
 """
+
 import json
 import socket
 import struct
@@ -105,7 +106,7 @@ def request(host: str, group: int, req_cmd: int, reply_cmd: int):
             frame = read_frame(s)
             if not frame:
                 break
-            g, c, payload = frame
+            _g, c, payload = frame
             if c == reply_cmd:
                 return _decode(payload)
     return None
@@ -211,7 +212,7 @@ def event_query(host: str, text: str) -> None:
                 frame = read_event_frame(s)
                 if not frame:
                     break
-                op, status, payload = frame
+                op, _status, payload = frame
                 if op == 0xD0:
                     print(payload.decode("utf-8", "replace"))
                     return
@@ -234,9 +235,8 @@ def _fmt_event(op: int, status: int, payload: bytes) -> str:
         group = struct.unpack(">H", body[0:2])[0]
         cmd = body[2]
         data = body[3:]
-        return (
-            f"[mirror] group={group} cmd=0x{cmd:02x}"
-            + (f" value={_decode(data)!r}" if data else " (get)")
+        return f"[mirror] group={group} cmd=0x{cmd:02x}" + (
+            f" value={_decode(data)!r}" if data else " (get)"
         )
     text = payload.decode("utf-8", "replace") if payload else ""
     return f"[{label}] status={status}" + (f" {text}" if text else "")
@@ -293,7 +293,9 @@ def main() -> int:
     elif verb == "channel":
         event_ascii(
             host,
-            {"stereo": "SETSTEREO", "left": "SETLEFT", "right": "SETRIGHT"}[rest[0].lower()],
+            {"stereo": "SETSTEREO", "left": "SETLEFT", "right": "SETRIGHT"}[
+                rest[0].lower()
+            ],
         )
     elif verb == "cmd":
         send_cmd(host, rest[0])

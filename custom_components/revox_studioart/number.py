@@ -3,21 +3,22 @@
 from __future__ import annotations
 
 from homeassistant.components.number import NumberMode, RestoreNumber
-from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import EntityCategory
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
-from .const import DOMAIN
-from .coordinator import RevoxCoordinator
+from .coordinator import RevoxConfigEntry, RevoxCoordinator
 from .entity import RevoxEntity
+
+PARALLEL_UPDATES = 0
 
 
 async def async_setup_entry(
-    hass: HomeAssistant, entry: ConfigEntry, async_add_entities: AddEntitiesCallback
+    hass: HomeAssistant,
+    entry: RevoxConfigEntry,
+    async_add_entities: AddEntitiesCallback,
 ) -> None:
-    coordinator: RevoxCoordinator = hass.data[DOMAIN][entry.entry_id]
-    async_add_entities([RevoxMaxVolume(coordinator)])
+    async_add_entities([RevoxMaxVolume(entry.runtime_data)])
 
 
 class RevoxMaxVolume(RevoxEntity, RestoreNumber):
@@ -28,7 +29,6 @@ class RevoxMaxVolume(RevoxEntity, RestoreNumber):
     """
 
     _attr_translation_key = "max_volume_limit"
-    _attr_icon = "mdi:volume-high"
     _attr_native_min_value = 1
     _attr_native_max_value = 100
     _attr_native_step = 1

@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections.abc import Coroutine
 from datetime import timedelta
 from typing import Any
 
 from homeassistant.config_entries import ConfigEntry
+from homeassistant.const import CONF_HOST
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.debounce import Debouncer
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
@@ -17,17 +19,22 @@ from .const import DEFAULT_SCAN_INTERVAL, DOMAIN
 
 _LOGGER = logging.getLogger(__name__)
 
+type RevoxConfigEntry = ConfigEntry[RevoxCoordinator]
+
 
 class RevoxCoordinator(DataUpdateCoordinator[RevoxState]):
     """Polls the speaker and applies push updates from the event channel."""
 
+    config_entry: RevoxConfigEntry
+
     def __init__(
-        self, hass: HomeAssistant, entry: ConfigEntry, client: RevoxStudioArtClient
+        self, hass: HomeAssistant, entry: RevoxConfigEntry, client: RevoxStudioArtClient
     ) -> None:
         super().__init__(
             hass,
             _LOGGER,
-            name=f"{DOMAIN} {entry.data.get('host')}",
+            config_entry=entry,
+            name=f"{DOMAIN} {entry.data[CONF_HOST]}",
             update_interval=timedelta(seconds=DEFAULT_SCAN_INTERVAL),
             # pushes trigger confirming polls; keep them snappy but coalesced
             request_refresh_debouncer=Debouncer(
@@ -35,7 +42,6 @@ class RevoxCoordinator(DataUpdateCoordinator[RevoxState]):
             ),
         )
         self.client = client
-        self.entry = entry
         self._burst_task: asyncio.Task | None = None
 
     async def _async_update_data(self) -> RevoxState:
@@ -44,7 +50,7 @@ class RevoxCoordinator(DataUpdateCoordinator[RevoxState]):
         except RevoxError as err:
             raise UpdateFailed(str(err)) from err
 
-    async def async_command(self, coro) -> None:
+    async def async_command(self, coro: Coroutine[Any, Any, Any]) -> None:
         """Run a control coroutine then refresh state quickly."""
         await coro
         await self.async_request_refresh()

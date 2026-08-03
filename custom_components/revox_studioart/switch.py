@@ -2,7 +2,7 @@
 
 All toggles below are backed by binary set commands confirmed in the packet
 capture of the StudioART app and partially verified on a live speaker (see
-README for the triplet table):
+docs/PROTOCOL.md for the triplet table):
 
   * Loudness                  get 0x34 / set 0x36        (device-verified)
   * Aux-In trigger            set 0x9E INVERTED, state = Kleernet "DisAutoAux"
@@ -21,16 +21,16 @@ from dataclasses import dataclass
 from typing import Any
 
 from homeassistant.components.switch import SwitchEntity, SwitchEntityDescription
-from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import STATE_ON, EntityCategory
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.restore_state import RestoreEntity
 
 from .api import RevoxState, RevoxStudioArtClient
-from .const import DOMAIN
-from .coordinator import RevoxCoordinator
+from .coordinator import RevoxConfigEntry, RevoxCoordinator
 from .entity import RevoxEntity
+
+PARALLEL_UPDATES = 0
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -46,28 +46,24 @@ SWITCHES: tuple[RevoxSwitchDescription, ...] = (
     RevoxSwitchDescription(
         key="aux_trigger",
         translation_key="aux_trigger",
-        icon="mdi:audio-input-stereo-minijack",
         value=lambda st: st.aux_trigger,
         set_fn=lambda client, on: client.set_aux_trigger(on),
     ),
     RevoxSwitchDescription(
         key="aux_high_sens",
         translation_key="aux_trigger_high_sensitivity",
-        icon="mdi:knob",
         value=lambda st: st.aux_high_sensitivity,
         set_fn=lambda client, on: client.set_aux_high_sensitivity(on),
     ),
     RevoxSwitchDescription(
         key="loudness",
         translation_key="loudness",
-        icon="mdi:volume-vibrate",
         value=lambda st: st.loudness,
         set_fn=lambda client, on: client.set_loudness(on),
     ),
     RevoxSwitchDescription(
         key="lr_swap",
         translation_key="switch_lr_channel",
-        icon="mdi:swap-horizontal",
         entity_category=EntityCategory.CONFIG,
         value=lambda st: st.lr_reverse,
         set_fn=lambda client, on: client.set_lr_swap(on),
@@ -75,7 +71,6 @@ SWITCHES: tuple[RevoxSwitchDescription, ...] = (
     RevoxSwitchDescription(
         key="autopoweron",
         translation_key="auto_power_on",
-        icon="mdi:power-settings",
         entity_category=EntityCategory.CONFIG,
         value=lambda st: st.auto_power_on,
         set_fn=lambda client, on: client.set_auto_power_on(on),
@@ -84,12 +79,12 @@ SWITCHES: tuple[RevoxSwitchDescription, ...] = (
 
 
 async def async_setup_entry(
-    hass: HomeAssistant, entry: ConfigEntry, async_add_entities: AddEntitiesCallback
+    hass: HomeAssistant,
+    entry: RevoxConfigEntry,
+    async_add_entities: AddEntitiesCallback,
 ) -> None:
-    coordinator: RevoxCoordinator = hass.data[DOMAIN][entry.entry_id]
-    entities: list[SwitchEntity] = [
-        RevoxSwitch(coordinator, desc) for desc in SWITCHES
-    ]
+    coordinator = entry.runtime_data
+    entities: list[SwitchEntity] = [RevoxSwitch(coordinator, desc) for desc in SWITCHES]
     entities.append(RevoxBassBoostSwitch(coordinator))
     async_add_entities(entities)
 
@@ -99,7 +94,9 @@ class RevoxSwitch(RevoxEntity, SwitchEntity):
 
     entity_description: RevoxSwitchDescription
 
-    def __init__(self, coordinator: RevoxCoordinator, desc: RevoxSwitchDescription) -> None:
+    def __init__(
+        self, coordinator: RevoxCoordinator, desc: RevoxSwitchDescription
+    ) -> None:
         super().__init__(coordinator)
         self.entity_description = desc
         self._attr_unique_id = f"{self._unique_base}_{desc.key}"
@@ -137,7 +134,6 @@ class RevoxBassBoostSwitch(RevoxEntity, RestoreEntity, SwitchEntity):
     """
 
     _attr_translation_key = "bass_boost"
-    _attr_icon = "mdi:speaker"
 
     def __init__(self, coordinator: RevoxCoordinator) -> None:
         super().__init__(coordinator)

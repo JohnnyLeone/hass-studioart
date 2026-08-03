@@ -12,16 +12,16 @@ from homeassistant.components.sensor import (
     SensorEntityDescription,
     SensorStateClass,
 )
-from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import PERCENTAGE, EntityCategory
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.icon import icon_for_battery_level
 
 from .api import RevoxState, parse_battery
-from .const import DOMAIN
-from .coordinator import RevoxCoordinator
+from .coordinator import RevoxConfigEntry, RevoxCoordinator
 from .entity import RevoxEntity
+
+PARALLEL_UPDATES = 0
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -43,7 +43,6 @@ SENSORS: tuple[RevoxSensorDescription, ...] = (
     RevoxSensorDescription(
         key="wifi_ssid",
         translation_key="wifi_ssid",
-        icon="mdi:wifi",
         entity_category=EntityCategory.DIAGNOSTIC,
         value=lambda st: st.ssid,
     ),
@@ -54,14 +53,12 @@ SENSORS: tuple[RevoxSensorDescription, ...] = (
         translation_key="wifi_signal_quality",
         device_class=SensorDeviceClass.ENUM,
         options=list(WIFI_QUALITY.values()),
-        icon="mdi:wifi",
         entity_category=EntityCategory.DIAGNOSTIC,
         value=lambda st: WIFI_QUALITY.get(st.rssi),
     ),
     RevoxSensorDescription(
         key="ip",
         translation_key="ip_address",
-        icon="mdi:ip-network",
         entity_category=EntityCategory.DIAGNOSTIC,
         entity_registry_enabled_default=False,
         value=lambda st: st.ip,
@@ -70,7 +67,6 @@ SENSORS: tuple[RevoxSensorDescription, ...] = (
         # LED ring brightness as reported by the device (0-100).
         key="brightness",
         translation_key="brightness",
-        icon="mdi:brightness-6",
         native_unit_of_measurement=PERCENTAGE,
         entity_category=EntityCategory.DIAGNOSTIC,
         entity_registry_enabled_default=False,
@@ -80,12 +76,12 @@ SENSORS: tuple[RevoxSensorDescription, ...] = (
 
 
 async def async_setup_entry(
-    hass: HomeAssistant, entry: ConfigEntry, async_add_entities: AddEntitiesCallback
+    hass: HomeAssistant,
+    entry: RevoxConfigEntry,
+    async_add_entities: AddEntitiesCallback,
 ) -> None:
-    coordinator: RevoxCoordinator = hass.data[DOMAIN][entry.entry_id]
-    entities: list[SensorEntity] = [
-        RevoxSensor(coordinator, desc) for desc in SENSORS
-    ]
+    coordinator = entry.runtime_data
+    entities: list[SensorEntity] = [RevoxSensor(coordinator, desc) for desc in SENSORS]
     entities.extend(
         [
             RevoxBatterySensor(coordinator),
@@ -99,7 +95,9 @@ async def async_setup_entry(
 class RevoxSensor(RevoxEntity, SensorEntity):
     entity_description: RevoxSensorDescription
 
-    def __init__(self, coordinator: RevoxCoordinator, desc: RevoxSensorDescription) -> None:
+    def __init__(
+        self, coordinator: RevoxCoordinator, desc: RevoxSensorDescription
+    ) -> None:
         super().__init__(coordinator)
         self.entity_description = desc
         self._attr_unique_id = f"{self._unique_base}_{desc.key}"
@@ -155,7 +153,9 @@ class RevoxBatteryBase(RevoxEntity, RestoreSensor):
     @property
     def icon(self) -> str:
         soc, charging = self._battery
-        return icon_for_battery_level(soc if soc is not None else self._last_soc, bool(charging))
+        return icon_for_battery_level(
+            soc if soc is not None else self._last_soc, bool(charging)
+        )
 
     @property
     def extra_state_attributes(self) -> dict:
@@ -163,7 +163,9 @@ class RevoxBatteryBase(RevoxEntity, RestoreSensor):
         return {
             "charging": charging,
             # flags that the shown value is held from before charging began
-            "soc_is_last_known": bool(charging) and soc is None and self._last_soc is not None,
+            "soc_is_last_known": bool(charging)
+            and soc is None
+            and self._last_soc is not None,
         }
 
 
@@ -205,7 +207,6 @@ class RevoxPairedSpeakerSensor(RevoxPairedBase):
     """Name and details of the paired client speaker (e.g. the stereo partner)."""
 
     _attr_translation_key = "paired_speaker"
-    _attr_icon = "mdi:speaker-multiple"
 
     def __init__(self, coordinator: RevoxCoordinator) -> None:
         super().__init__(coordinator)

@@ -16,14 +16,17 @@ from homeassistant.components.media_player import (
     MediaType,
     async_process_play_media_url,
 )
-from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.util import dt as dt_util
 
-from .const import DOMAIN, SOURCE_COMMANDS, SOURCE_ID_TO_NAME, SOURCE_IDS
-from .coordinator import RevoxCoordinator
+from .const import SOURCE_COMMANDS, SOURCE_ID_TO_NAME, SOURCE_IDS
+from .coordinator import RevoxConfigEntry, RevoxCoordinator
 from .entity import RevoxEntity
+
+# commands are serialized by the client's own connection lock
+PARALLEL_UPDATES = 0
 
 # Everything selectable: numeric-id sources (app mechanism) plus the
 # documented ASCII sources. Names overlapping in both maps prefer the id.
@@ -44,10 +47,11 @@ SUPPORT = (
 
 
 async def async_setup_entry(
-    hass: HomeAssistant, entry: ConfigEntry, async_add_entities: AddEntitiesCallback
+    hass: HomeAssistant,
+    entry: RevoxConfigEntry,
+    async_add_entities: AddEntitiesCallback,
 ) -> None:
-    coordinator: RevoxCoordinator = hass.data[DOMAIN][entry.entry_id]
-    async_add_entities([RevoxMediaPlayer(coordinator)])
+    async_add_entities([RevoxMediaPlayer(entry.runtime_data)])
 
 
 class RevoxMediaPlayer(RevoxEntity, MediaPlayerEntity):
@@ -255,10 +259,11 @@ class RevoxMediaPlayer(RevoxEntity, MediaPlayerEntity):
             )
             media_id = item.url
         media_id = async_process_play_media_url(self.hass, media_id)
-        if media_id.startswith(("http://", "https://")):
-            await self.coordinator.async_command(
-                self.coordinator.client.play_url(media_id)
+        if not media_id.startswith(("http://", "https://")):
+            raise HomeAssistantError(
+                f"Only http(s) URLs can be played, got: {media_id}"
             )
+        await self.coordinator.async_command(self.coordinator.client.play_url(media_id))
 
     async def async_browse_media(
         self,

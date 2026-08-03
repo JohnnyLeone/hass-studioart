@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from homeassistant.components.select import SelectEntity
-from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import EntityCategory
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
@@ -12,12 +11,13 @@ from .const import (
     CHANNEL_COMMANDS,
     CHANNEL_OPTIONS,
     CHANNEL_TOKEN_TO_OPTION,
-    DOMAIN,
     KLEERNET_BAND_OPTIONS,
     POWER_ON_SOURCE_OPTIONS,
 )
-from .coordinator import RevoxCoordinator
+from .coordinator import RevoxConfigEntry, RevoxCoordinator
 from .entity import RevoxEntity
+
+PARALLEL_UPDATES = 0
 
 # reverse lookups: option label -> wire value
 _POWER_ON_SOURCE_TO_ID = {label: idx for idx, label in POWER_ON_SOURCE_OPTIONS.items()}
@@ -25,9 +25,11 @@ _KLEERNET_BAND_TO_ID = {label: band for band, label in KLEERNET_BAND_OPTIONS.ite
 
 
 async def async_setup_entry(
-    hass: HomeAssistant, entry: ConfigEntry, async_add_entities: AddEntitiesCallback
+    hass: HomeAssistant,
+    entry: RevoxConfigEntry,
+    async_add_entities: AddEntitiesCallback,
 ) -> None:
-    coordinator: RevoxCoordinator = hass.data[DOMAIN][entry.entry_id]
+    coordinator = entry.runtime_data
     async_add_entities(
         [
             RevoxChannelSelect(coordinator),
@@ -38,7 +40,7 @@ async def async_setup_entry(
 
 
 class RevoxChannelSelect(RevoxEntity, SelectEntity):
-    """"Multi-room Speaker Setting" in the app: Stereo / Left / Right.
+    """ "Multi-room Speaker Setting" in the app: Stereo / Left / Right.
 
     SETSTEREO / SETLEFT / SETRIGHT are sent over the event channel (op 0x6A)
     exactly like the official app. The speaker confirms with an 0x67 status
@@ -48,7 +50,6 @@ class RevoxChannelSelect(RevoxEntity, SelectEntity):
     """
 
     _attr_translation_key = "multiroom_channel"
-    _attr_icon = "mdi:speaker-multiple"
     _attr_options = CHANNEL_OPTIONS
 
     def __init__(self, coordinator: RevoxCoordinator) -> None:
@@ -87,7 +88,6 @@ class RevoxPowerOnSourceSelect(RevoxEntity, SelectEntity):
     """
 
     _attr_translation_key = "power_on_source"
-    _attr_icon = "mdi:power-on"
     _attr_entity_category = EntityCategory.CONFIG
     _attr_options = list(POWER_ON_SOURCE_OPTIONS.values())
 
@@ -117,7 +117,6 @@ class RevoxKleernetBandSelect(RevoxEntity, SelectEntity):
     """
 
     _attr_translation_key = "kleernet_band"
-    _attr_icon = "mdi:radio-tower"
     _attr_entity_category = EntityCategory.CONFIG
     _attr_options = list(KLEERNET_BAND_OPTIONS.values())
 

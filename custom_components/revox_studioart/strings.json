@@ -99,5 +99,37 @@
         "name": "Check P100"
       }
     }
+  },
+  "services": {
+    "send_command": {
+      "name": "Send raw command",
+      "description": "Sends a raw command to a STUDIOART speaker. Use this to experiment with controls that do not yet have a dedicated entity.",
+      "fields": {
+        "entry_id": {
+          "name": "Config entry ID",
+          "description": "The config entry (device) to target."
+        },
+        "ascii": {
+          "name": "ASCII command",
+          "description": "Text sent after \"cmd \" (e.g. \"volume 40\", \"source aux\", \"loudness\")."
+        },
+        "raw": {
+          "name": "Raw line",
+          "description": "A bare line terminated with CRLF (e.g. \"SETLEFT\")."
+        },
+        "bin_group": {
+          "name": "Binary group",
+          "description": "Namespace ID for a binary set command (2 = device, 3 = multi-room)."
+        },
+        "bin_cmd": {
+          "name": "Binary set command",
+          "description": "The set command byte (e.g. 0x5B = 91 for Auto power on)."
+        },
+        "bin_value": {
+          "name": "Binary value",
+          "description": "The value byte (usually 0 or 1)."
+        }
+      }
+    }
   }
 }

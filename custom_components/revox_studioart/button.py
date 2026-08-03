@@ -3,20 +3,22 @@
 from __future__ import annotations
 
 from homeassistant.components.button import ButtonDeviceClass, ButtonEntity
-from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import EntityCategory
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
-from .const import DOMAIN
-from .coordinator import RevoxCoordinator
+from .coordinator import RevoxConfigEntry, RevoxCoordinator
 from .entity import RevoxEntity
+
+PARALLEL_UPDATES = 0
 
 
 async def async_setup_entry(
-    hass: HomeAssistant, entry: ConfigEntry, async_add_entities: AddEntitiesCallback
+    hass: HomeAssistant,
+    entry: RevoxConfigEntry,
+    async_add_entities: AddEntitiesCallback,
 ) -> None:
-    coordinator: RevoxCoordinator = hass.data[DOMAIN][entry.entry_id]
+    coordinator = entry.runtime_data
     async_add_entities(
         [RevoxRestartButton(coordinator), RevoxCheckP100Button(coordinator)]
     )
@@ -44,7 +46,7 @@ class RevoxRestartButton(RevoxEntity, ButtonEntity):
 
 
 class RevoxCheckP100Button(RevoxEntity, ButtonEntity):
-    """"Check P100" in the app: probe whether a wired P100 partner speaker
+    """ "Check P100" in the app: probe whether a wired P100 partner speaker
     is connected to the A100.
 
     Sends group 3 / 0x0F (confirmed on the wire, no reply). Independent of
@@ -52,7 +54,6 @@ class RevoxCheckP100Button(RevoxEntity, ButtonEntity):
     """
 
     _attr_translation_key = "check_p100"
-    _attr_icon = "mdi:speaker"
     _attr_entity_category = EntityCategory.DIAGNOSTIC
 
     def __init__(self, coordinator: RevoxCoordinator) -> None:

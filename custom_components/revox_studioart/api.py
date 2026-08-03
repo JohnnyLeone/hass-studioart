@@ -16,7 +16,7 @@ Port 50007 — control. Carries two protocols simultaneously:
    acknowledged with the same reply cmd N+1 carrying the new value). Payloads
    are a single status byte or a UTF-8 JSON object.
 
-   Confirmed triplets/reads (see README for the capture evidence; the
+   Confirmed triplets/reads (see docs/PROTOCOL.md for the capture evidence; the
    loudness/aux-trigger assignment was verified against a live speaker):
 
      group 2,               set 0x03  Select source by numeric id (19 = Bluetooth,
@@ -65,7 +65,7 @@ Port 7777 — event/push channel, message-framed:
    ``VV`` is 0x02 for most ops (0x01 for the legacy volume query 0x40). The
    client sends the 4 crc bytes as zeros; the speaker fills a 16-bit checksum
    which we do not need to verify. The observed opcodes are the ``_EV_*``
-   constants below; the full table with capture evidence lives in the README.
+   constants below; the full table with capture evidence lives in docs/PROTOCOL.md.
 """
 
 from __future__ import annotations
@@ -295,7 +295,7 @@ class RevoxStudioArtClient:
             return await asyncio.wait_for(
                 asyncio.open_connection(self._host, port), timeout=4.0
             )
-        except (OSError, asyncio.TimeoutError) as err:
+        except (TimeoutError, OSError) as err:
             raise RevoxError(f"cannot connect to {self._host}:{port}: {err}") from err
 
     @staticmethod
@@ -466,7 +466,9 @@ class RevoxStudioArtClient:
                 # (and right after the push briefly still reports 1). Hold
                 # paused unless the JSON shows real playback again or the
                 # push grows old.
-                if st.play_state == 1 and age < 3.0 or st.play_state != 1 and age < 30.0:
+                if (st.play_state == 1 and age < 3.0) or (
+                    st.play_state != 1 and age < 30.0
+                ):
                     st.play_state = 2
             elif age < 1.5:
                 st.play_state = value
@@ -479,7 +481,7 @@ class RevoxStudioArtClient:
     ) -> dict[str, Any]:
         try:
             return await self._request_json(reader, writer, *cmd_triplet)
-        except (RevoxError, asyncio.TimeoutError, asyncio.IncompleteReadError):
+        except (TimeoutError, RevoxError, asyncio.IncompleteReadError):
             return {}
 
     async def _optional_byte(
@@ -490,7 +492,7 @@ class RevoxStudioArtClient:
     ) -> int | None:
         try:
             return await self._request_byte(reader, writer, *cmd_triplet)
-        except (RevoxError, asyncio.TimeoutError, asyncio.IncompleteReadError):
+        except (TimeoutError, RevoxError, asyncio.IncompleteReadError):
             return None
 
     # -- public API: control --------------------------------------------------
@@ -515,7 +517,7 @@ class RevoxStudioArtClient:
                     try:
                         raw = await asyncio.wait_for(reader.read(256), timeout=1.5)
                         return raw.decode("utf-8", "replace").strip()
-                    except (asyncio.TimeoutError, OSError):
+                    except (TimeoutError, OSError):
                         return None
                 if read_ack_frame:
                     with contextlib.suppress(
@@ -529,7 +531,9 @@ class RevoxStudioArtClient:
             finally:
                 await self._close(writer)
 
-    async def async_send_cmd(self, command: str, expect_reply: bool = False) -> str | None:
+    async def async_send_cmd(
+        self, command: str, expect_reply: bool = False
+    ) -> str | None:
         """Send an ASCII ``cmd ...`` control command.
 
         ``command`` is the text after ``cmd `` (e.g. ``"volume 50"``).
@@ -619,7 +623,7 @@ class RevoxStudioArtClient:
         await self.async_set_bin(*CMD_POWER_ACTION, POWER_ACTION_RESTART)
 
     async def check_p100(self) -> None:
-        """"Check P100" (group 3 / 0x0F): probe whether a wired P100 partner
+        """ "Check P100" (group 3 / 0x0F): probe whether a wired P100 partner
         speaker is connected to the A100. No reply is sent on the wire."""
         await self._oneshot(_build_frame(*CMD_CHECK_P100), read_ack_frame=True)
 
@@ -655,7 +659,7 @@ class RevoxStudioArtClient:
                 await task
             except asyncio.CancelledError:
                 pass
-            except Exception:  # noqa: BLE001 - shutdown must not raise
+            except Exception:
                 _LOGGER.debug("event task raised on shutdown", exc_info=True)
 
     async def async_send_event_ascii(self, text: str) -> None:
@@ -685,7 +689,7 @@ class RevoxStudioArtClient:
 
             try:
                 return await asyncio.wait_for(_wait_for_reply(), timeout=4.0)
-            except (asyncio.TimeoutError, _EventIdle):
+            except (TimeoutError, _EventIdle):
                 return None
         finally:
             await self._close(writer)
@@ -701,7 +705,7 @@ class RevoxStudioArtClient:
         """
         try:
             header = await asyncio.wait_for(reader.readexactly(10), timeout=30.0)
-        except asyncio.TimeoutError as err:
+        except TimeoutError as err:
             raise _EventIdle from err
         # [00 00 VV 00][OP][ST][crc16][len16 BE]
         op = header[4]

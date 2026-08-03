@@ -1,0 +1,67 @@
+{
+  "entity": {
+    "button": {
+      "check_p100": {
+        "default": "mdi:speaker"
+      }
+    },
+    "number": {
+      "max_volume_limit": {
+        "default": "mdi:volume-high"
+      }
+    },
+    "select": {
+      "multiroom_channel": {
+        "default": "mdi:speaker-multiple"
+      },
+      "power_on_source": {
+        "default": "mdi:power-on"
+      },
+      "kleernet_band": {
+        "default": "mdi:radio-tower"
+      }
+    },
+    "sensor": {
+      "wifi_ssid": {
+        "default": "mdi:wifi"
+      },
+      "wifi_signal_quality": {
+        "default": "mdi:wifi"
+      },
+      "ip_address": {
+        "default": "mdi:ip-network"
+      },
+      "brightness": {
+        "default": "mdi:brightness-6"
+      },
+      "paired_speaker": {
+        "default": "mdi:speaker-multiple"
+      }
+    },
+    "switch": {
+      "aux_trigger": {
+        "default": "mdi:audio-input-stereo-minijack"
+      },
+      "aux_trigger_high_sensitivity": {
+        "default": "mdi:knob"
+      },
+      "loudness": {
+        "default": "mdi:volume-vibrate"
+      },
+      "switch_lr_channel": {
+        "default": "mdi:swap-horizontal"
+      },
+      "auto_power_on": {
+        "default": "mdi:power-settings"
+      },
+      "bass_boost": {
+        "default": "mdi:speaker"
+      }
+    }
+  },
+  "services": {
+    "send_command": {
+      "service": "mdi:console-line"
+    }
+  }
+}
