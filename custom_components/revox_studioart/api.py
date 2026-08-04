@@ -47,9 +47,13 @@ Port 50007 — control. Carries two protocols simultaneously:
      group 2,        0x9D, set 0x9E  Disable auto aux = Aux-In trigger INVERTED
                                      (1 = trigger off; state = "DisAutoAux" in
                                      the group 3 / 0x57 Kleernet JSON)
-     group 3, 0x03 -> 0x04          multi-room state (JSON: LRreverse/paired)
-     group 3, 0x56 -> 0x57          Kleernet config (JSON: D83Fre/DisAutoAux)
+     group 3, 0x01                  enter Kleernet pairing mode (no reply; the
+                                     bind then runs over the Kleernet radio)
+     group 3, 0x03 -> 0x04, set 0x05  multi-room state (JSON: LRreverse/paired);
+                                     the set UNPAIRS the partner whose serial
+                                     is given as bare ASCII, e.g. b"SAAD11958"
      group 3, 0x0F                  sent by the app for "Check P100" (no reply seen)
+     group 3, 0x56 -> 0x57          Kleernet config (JSON: D83Fre/DisAutoAux)
 
 2. ASCII "telnet" control (valid from A100 firmware V41+)::
 
@@ -66,6 +70,17 @@ Port 7777 — event/push channel, message-framed:
    client sends the 4 crc bytes as zeros; the speaker fills a 16-bit checksum
    which we do not need to verify. The observed opcodes are the ``_EV_*``
    constants below; the full table with capture evidence lives in docs/PROTOCOL.md.
+
+Two things worth knowing before extending this client, both learned the hard
+way and documented in full in docs/PROTOCOL.md:
+
+* **The speaker is two computers.** Port 7777 is Libre's LUCI protocol, served
+  by the Linux/Cast board; port 50007 (groups 2 and 3) is served by a separate
+  ATMEL host MCU over a UART. That is why the two halves feel like different
+  protocols — they are.
+* **Every port-50007 reply is fanned out to all open connections.** A frame
+  arriving on our socket is not necessarily an answer to what we asked, so
+  replies are matched on the expected cmd rather than simply read in order.
 """
 
 from __future__ import annotations
@@ -250,27 +265,40 @@ class RevoxState:
     # channel 0 while a pairing completes). Event 0x67 is DDMS and does not.
 
     @property
+    def kleernet_partners(self) -> list[dict[str, Any]]:
+        """Bound partners that carry a serial — the payload unpairing needs.
+
+        Entries without an ``ID`` cannot be unpaired, so they are filtered out
+        here once rather than at each call site.
+        """
+        return [p for p in self.paired if p.get("ID")]
+
+    @property
     def kleernet_paired(self) -> bool:
-        """True when a Kleernet partner speaker is bound."""
-        return bool(self.paired)
+        """True when at least one Kleernet partner speaker is bound."""
+        return bool(self.kleernet_partners)
 
     @property
     def kleernet_partner(self) -> dict[str, Any] | None:
-        """The bound partner's entry, or None. A pair is limited to one."""
-        return self.paired[0] if self.paired else None
+        """The single bound partner, or None if there are zero or several.
+
+        Returning None for "several" is deliberate: unpairing needs one
+        specific serial, so anything that acts without being told which
+        partner to use must only do so when the choice is unambiguous.
+        """
+        partners = self.kleernet_partners
+        return partners[0] if len(partners) == 1 else None
 
     @property
     def kleernet_partner_serial(self) -> str | None:
-        """Serial of the bound partner — the payload unpairing expects."""
+        """Serial of the single bound partner, if unambiguous."""
         partner = self.kleernet_partner
-        serial = partner.get("ID") if partner else None
-        return serial or None
+        return partner["ID"] if partner else None
 
     @property
     def kleernet_pairing(self) -> bool:
-        """True while a bind is still settling (partner present, channel 0)."""
-        partner = self.kleernet_partner
-        return bool(partner) and partner.get("channel") == 0
+        """True while a bind is still settling (a partner reports channel 0)."""
+        return any(p.get("channel") == 0 for p in self.kleernet_partners)
 
 
 def _build_frame(group: int, cmd: int, payload: bytes = b"") -> bytes:

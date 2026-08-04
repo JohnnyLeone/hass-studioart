@@ -2,14 +2,13 @@
 
 from __future__ import annotations
 
-import asyncio
-
 from homeassistant.components.button import ButtonDeviceClass, ButtonEntity
 from homeassistant.const import EntityCategory
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
+from .const import UNPAIR_SETTLE_SECONDS
 from .coordinator import RevoxConfigEntry, RevoxCoordinator
 from .entity import RevoxEntity
 
@@ -117,36 +116,33 @@ class RevoxKleernetUnpairButton(RevoxEntity, ButtonEntity):
         super().__init__(coordinator)
         self._attr_unique_id = f"{self._unique_base}_kleernet_unpair"
 
-    def _sole_partner(self) -> dict | None:
-        """The single bound partner, or None if there are zero or several."""
+    @property
+    def _partner(self) -> dict | None:
+        """The single bound partner; None when there are zero or several."""
         st = self.coordinator.data
-        paired = [p for p in (st.paired if st else []) if p.get("ID")]
-        return paired[0] if len(paired) == 1 else None
+        return st.kleernet_partner if st else None
 
     @property
     def available(self) -> bool:
-        return super().available and self._sole_partner() is not None
+        return super().available and self._partner is not None
 
     @property
     def extra_state_attributes(self) -> dict:
         """Show which speaker this will unpair, so the button is not a mystery."""
-        partner = self._sole_partner()
+        partner = self._partner
         if partner is None:
             return {}
-        return {
-            "target_name": partner.get("name"),
-            "target_serial": partner.get("ID"),
-        }
+        return {"target_name": partner.get("name"), "target_serial": partner["ID"]}
 
     async def async_press(self) -> None:
-        partner = self._sole_partner()
+        partner = self._partner
         if partner is None:
             raise HomeAssistantError(
                 "Expected exactly one paired partner speaker. Use the "
                 "revox_studioart.unpair_speaker service with a 'serial' to "
                 "choose which one to unpair."
             )
-        await self.coordinator.client.kleernet_unpair(partner["ID"])
-        # paired[] empties roughly four seconds later (packet-capture timed)
-        await asyncio.sleep(5)
-        await self.coordinator.async_request_refresh()
+        await self.coordinator.async_command(
+            self.coordinator.client.kleernet_unpair(partner["ID"]),
+            settle=UNPAIR_SETTLE_SECONDS,
+        )

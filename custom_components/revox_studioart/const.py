@@ -77,3 +77,7 @@ KLEERNET_BAND_OPTIONS: dict[int, str] = {
     2: "5.2 GHz",
     3: "5.8 GHz",
 }
+
+# The speaker drops the partner from paired[] roughly four seconds after an
+# unpair (timed from a packet capture), so schedule one more refresh after that.
+UNPAIR_SETTLE_SECONDS = 5.0

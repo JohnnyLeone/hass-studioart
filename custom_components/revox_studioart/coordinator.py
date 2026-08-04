@@ -43,6 +43,7 @@ class RevoxCoordinator(DataUpdateCoordinator[RevoxState]):
         )
         self.client = client
         self._burst_task: asyncio.Task | None = None
+        self._settle_task: asyncio.Task | None = None
 
     async def _async_update_data(self) -> RevoxState:
         try:
@@ -50,9 +51,27 @@ class RevoxCoordinator(DataUpdateCoordinator[RevoxState]):
         except RevoxError as err:
             raise UpdateFailed(str(err)) from err
 
-    async def async_command(self, coro: Coroutine[Any, Any, Any]) -> None:
-        """Run a control coroutine then refresh state quickly."""
+    async def async_command(
+        self, coro: Coroutine[Any, Any, Any], *, settle: float = 0.0
+    ) -> None:
+        """Run a control coroutine then refresh state quickly.
+
+        ``settle`` schedules one extra refresh that many seconds later, for
+        commands the speaker applies asynchronously — unpairing takes about
+        four seconds to show up in ``paired[]``. It is scheduled rather than
+        awaited so the caller (a button press, a service call) returns at once.
+        """
         await coro
+        await self.async_request_refresh()
+        if settle > 0:
+            if self._settle_task is not None:
+                self._settle_task.cancel()
+            self._settle_task = self.config_entry.async_create_background_task(
+                self.hass, self._async_settle_refresh(settle), "revox settle refresh"
+            )
+
+    async def _async_settle_refresh(self, delay: float) -> None:
+        await asyncio.sleep(delay)
         await self.async_request_refresh()
 
     # -- push updates --------------------------------------------------------
@@ -61,9 +80,10 @@ class RevoxCoordinator(DataUpdateCoordinator[RevoxState]):
         self.client.start_events(self._handle_push)
 
     async def async_stop_events(self) -> None:
-        if self._burst_task is not None:
-            self._burst_task.cancel()
-            self._burst_task = None
+        for task in (self._burst_task, self._settle_task):
+            if task is not None:
+                task.cancel()
+        self._burst_task = self._settle_task = None
         await self.client.stop_events()
 
     @callback

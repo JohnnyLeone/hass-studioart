@@ -363,6 +363,39 @@ def send_raw(host: str, text: str) -> None:
             print("sent:", text)
 
 
+def send_frame(
+    host: str,
+    group: int,
+    cmd: int,
+    payload: bytes = b"",
+    *,
+    expect: tuple[int, ...] | None = None,
+    timeout: float = 1.5,
+) -> None:
+    """Send one binary frame and print the ack.
+
+    ``expect`` filters which reply cmds count as ours: the speaker fans every
+    reply out to all open connections, so without it another client's poll
+    reply can be mistaken for an ack.
+    """
+    with socket.create_connection((host, PORT), timeout=4) as sock:
+        sock.sendall(build_frame(group, cmd, payload))
+        sock.settimeout(timeout)
+        try:
+            while True:
+                frame = read_frame(sock)
+                if not frame:
+                    break
+                g, c, data = frame
+                if expect is not None and (g != group or c not in expect):
+                    continue  # another client's traffic
+                print(f"ack: group={g} cmd=0x{c:02x} {_decode(data)!r}")
+                return
+        except (TimeoutError, OSError):
+            pass
+    print("no ack")
+
+
 def send_bin(host: str, group: int, cmd: int, value: int) -> None:
     with socket.create_connection((host, PORT), timeout=4) as s:
         s.sendall(build_frame(group, cmd, bytes([value & 0xFF])))
@@ -1243,42 +1276,13 @@ def main() -> int:
         # group 3 / 0x05 + partner serial = UNPAIR (packet-capture verified:
         # paired[] emptied ~4 s later). NOT the pair command.
         sn = rest[0].strip().upper()
-        with socket.create_connection((host, PORT), timeout=4) as s:
-            s.sendall(build_frame(3, 0x05, sn.encode("ascii")))
-            s.settimeout(2.0)
-            try:
-                frame = read_frame(s)
-                if frame:
-                    g, c, payload = frame
-                    print(f"ack: group={g} cmd=0x{c:02x} {_decode(payload)!r}")
-                else:
-                    print(f"sent unpair {sn} (no ack)")
-            except (TimeoutError, OSError):
-                print(f"sent unpair {sn} (no ack)")
+        send_frame(host, 3, 0x05, sn.encode("ascii"), expect=(0x04,), timeout=2.0)
         print("takes a few seconds; poll with: kleernet")
     elif verb == "kleernet-pairmode":
         # group 3 / 0x01, empty payload, no reply. The app sends this after an
         # unpair; the partner reappeared ~11 s later with no further traffic.
-        with socket.create_connection((host, PORT), timeout=4) as s:
-            s.sendall(build_frame(3, 0x01))
-            s.settimeout(1.5)
-            answered = False
-            try:
-                while True:
-                    frame = read_frame(s)
-                    if not frame:
-                        break
-                    g, c, payload = frame
-                    # The speaker fans every reply out to all connections, so
-                    # most of what arrives here belongs to other clients.
-                    if g == 3 and c in (0x01, 0x02):
-                        answered = True
-                        print(f"reply: group={g} cmd=0x{c:02x} {_decode(payload)!r}")
-                        break
-            except (TimeoutError, OSError):
-                pass
-            if not answered:
-                print("sent (no reply, as expected)")
+        # no reply is expected; "no ack" below is the normal outcome
+        send_frame(host, 3, 0x01, expect=(0x01, 0x02))
         print("the bind happens over the Kleernet radio; poll with: kleernet")
     elif verb == "scan":
         # scan <group> [start] [end] --i-understand

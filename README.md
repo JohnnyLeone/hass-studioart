@@ -36,6 +36,9 @@ picked up by the app just as fast.
   Speaker Setting")
 - Kleernet wireless band selection
 - Paired speaker info: name, volume, channel and battery of the partner speaker
+- *Partner speaker paired* sensor, plus **Pair speaker** and **Unpair speaker**
+  buttons — the partner's serial is read from the speaker, so there is nothing
+  to look up or type
 - "Check P100" button for a wired P100 partner speaker
 
 **Diagnostics**
@@ -107,9 +110,18 @@ AirPlay provider, which does handle resume.)
 - **Bass boost and Max volume limit** aren't reported back by the speaker, so
   Home Assistant shows the last value it sent (kept across restarts).
 - **Paired speaker settings.** A Kleernet-paired client speaker cannot be
-  configured over the network while paired. To change its own settings:
-  unpair in the app, configure it directly, then re-pair. Volume and channel
-  stay managed through the main speaker.
+  configured over the network while paired. To change its own settings: unpair
+  (the **Unpair speaker** button, or the `revox_studioart.unpair_speaker`
+  service), configure it directly, then pair again. Volume and channel stay
+  managed through the main speaker.
+- **Pairing happens over the radio.** *Unpair speaker* is a real network
+  command and takes a few seconds to show up. *Pair speaker* only puts the
+  speaker into pairing mode — the two speakers then find each other over
+  Kleernet, so the partner may need putting into pairing mode as well, and
+  it can take ten seconds or so before it reappears.
+- **"Paired" means Kleernet, not Wi-Fi.** The *Partner speaker paired* sensor
+  reflects the actual Kleernet bind. The separate `ddms_state` attribute is
+  the Wi-Fi multi-room state and stays `FREE` even with a partner bound.
 - **Restart button** makes the speaker drop off the network for a short
   while; the integration shows it as unavailable until it reconnects.
 

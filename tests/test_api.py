@@ -395,20 +395,24 @@ def test_kleernet_partner_serial_is_read_from_the_device(api):
     assert st.kleernet_partner["name"] == "Kitchen"
 
 
-def test_sole_partner_selection_rules(api):
-    """The button may only act when exactly one partner is bound.
+def test_kleernet_partners_filters_unusable_entries(api):
+    """Entries without an ID cannot be unpaired, so they must not count."""
+    st = api.RevoxState(paired=[_paired(), _paired(ID="", name="ghost")])
+    assert [p["ID"] for p in st.kleernet_partners] == ["SAAD11958"]
+    assert st.kleernet_paired is True
+    # exactly one *usable* partner, so it is still unambiguous
+    assert st.kleernet_partner_serial == "SAAD11958"
 
-    Mirrors RevoxKleernetUnpairButton._sole_partner: zero is nothing to do,
-    and several is ambiguous — the service with an explicit serial covers that.
-    """
 
-    def sole(paired):
-        entries = [p for p in paired if p.get("ID")]
-        return entries[0] if len(entries) == 1 else None
+def test_kleernet_partner_is_none_when_ambiguous(api):
+    """Several partners: nothing may act without being told which one."""
+    st = api.RevoxState(paired=[_paired(), _paired(ID="SBBB22222")])
+    assert st.kleernet_paired is True
+    assert st.kleernet_partner is None
+    assert st.kleernet_partner_serial is None
+    assert len(st.kleernet_partners) == 2
 
-    assert sole([]) is None
-    assert sole([_paired()])["ID"] == "SAAD11958"
-    assert sole([_paired(), _paired(ID="SBBB22222")]) is None
-    # an entry with a blank ID cannot be unpaired and must not count
-    assert sole([_paired(ID="")]) is None
-    assert sole([_paired(), _paired(ID="")])["ID"] == "SAAD11958"
+
+def test_kleernet_pairing_checks_every_partner(api):
+    st = api.RevoxState(paired=[_paired(channel=1), _paired(ID="SB", channel=0)])
+    assert st.kleernet_pairing is True
