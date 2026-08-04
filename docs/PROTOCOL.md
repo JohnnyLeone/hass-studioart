@@ -390,7 +390,8 @@ followed automatically on rediscovery.
 | `switch` Aux-In trigger | binary set `0x9E` **inverted** ("disable auto aux"), state = Kleernet `DisAutoAux` | **Verified on a live speaker** |
 | `binary_sensor` Partner speaker paired | `paired[]` from group 3 / `0x03` (**not** event `0x67`) | **Packet-capture verified** |
 | `button` Pair speaker | group 3 / `0x01` (enter Kleernet pairing mode) | **Verified on a live speaker** |
-| `button` Unpair speaker | group 3 / `0x05` + partner serial | **Verified on a live speaker** |
+| `button` Unpair speaker | group 3 / `0x05` + partner serial (read from `paired[]` at press time — never configured) | **Verified on a live speaker** |
+| `revox_studioart.unpair_speaker` service | same, with an optional explicit `serial` | **Verified on a live speaker** |
 | `switch` Aux-In trigger high sensitivity | binary get `0x41` / set `0x43` | **Verified on a live speaker** |
 | `switch` Loudness | binary get `0x34` / set `0x36` | **Verified on a live speaker** |
 | `switch` Switch L/R channel | binary set `0x62`, state = `LRreverse` | **Confirmed on the wire** |

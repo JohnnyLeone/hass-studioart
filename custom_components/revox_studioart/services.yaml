@@ -40,3 +40,16 @@ send_command:
           min: 0
           max: 255
           mode: box
+
+unpair_speaker:
+  fields:
+    entry_id:
+      required: true
+      example: "1a2b3c..."
+      selector:
+        text:
+    serial:
+      required: false
+      example: "SAAD11958"
+      selector:
+        text:

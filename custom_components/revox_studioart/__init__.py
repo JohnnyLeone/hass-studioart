@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+
 import homeassistant.helpers.config_validation as cv
 import voluptuous as vol
 from homeassistant.config_entries import ConfigEntryState
@@ -27,6 +29,7 @@ PLATFORMS: list[Platform] = [
 CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
 
 SERVICE_SEND_COMMAND = "send_command"
+SERVICE_UNPAIR_SPEAKER = "unpair_speaker"
 
 _SEND_SCHEMA = vol.Schema(
     {
@@ -36,6 +39,15 @@ _SEND_SCHEMA = vol.Schema(
         vol.Optional("bin_group"): vol.All(int, vol.Range(min=0, max=65535)),
         vol.Optional("bin_cmd"): vol.All(int, vol.Range(min=0, max=255)),
         vol.Optional("bin_value"): vol.All(int, vol.Range(min=0, max=255)),
+    }
+)
+
+# Unpair a Kleernet partner. `serial` is optional: with a single partner bound
+# (the normal case) it is looked up from the device, so nothing is hardcoded.
+_UNPAIR_SCHEMA = vol.Schema(
+    {
+        vol.Required("entry_id"): cv.string,
+        vol.Optional("serial"): cv.string,
     }
 )
 
@@ -56,8 +68,42 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
             )
         await coordinator.async_request_refresh()
 
+    async def _handle_unpair(call: ServiceCall) -> None:
+        coordinator = _resolve_coordinator(hass, call.data["entry_id"])
+        state = coordinator.data
+        bound = [p.get("ID") for p in (state.paired if state else [])]
+        bound = [b for b in bound if b]
+
+        serial = (call.data.get("serial") or "").strip().upper()
+        if not serial:
+            # default to the bound partner, but only when it is unambiguous
+            if not bound:
+                raise ServiceValidationError(
+                    "No partner speaker is paired to this device"
+                )
+            if len(bound) > 1:
+                raise ServiceValidationError(
+                    "Several partner speakers are paired ("
+                    + ", ".join(bound)
+                    + "); pass 'serial' to choose one"
+                )
+            serial = bound[0]
+        elif bound and serial not in bound:
+            raise ServiceValidationError(
+                f"{serial} is not paired to this device"
+                + (" (paired: " + ", ".join(bound) + ")" if bound else "")
+            )
+
+        await coordinator.client.kleernet_unpair(serial)
+        # the speaker takes ~4 s to drop the partner (packet-capture timed)
+        await asyncio.sleep(5)
+        await coordinator.async_request_refresh()
+
     hass.services.async_register(
         DOMAIN, SERVICE_SEND_COMMAND, _handle_send, schema=_SEND_SCHEMA
+    )
+    hass.services.async_register(
+        DOMAIN, SERVICE_UNPAIR_SPEAKER, _handle_unpair, schema=_UNPAIR_SCHEMA
     )
     return True
 

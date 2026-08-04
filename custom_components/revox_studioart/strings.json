@@ -139,6 +139,20 @@
           "description": "The value byte (usually 0 or 1)."
         }
       }
+    },
+    "unpair_speaker": {
+      "name": "Unpair partner speaker",
+      "description": "Unpair a Kleernet partner speaker. Leave the serial empty to unpair the speaker that is currently paired.",
+      "fields": {
+        "entry_id": {
+          "name": "Device",
+          "description": "Config entry id of the speaker to act on."
+        },
+        "serial": {
+          "name": "Serial number",
+          "description": "Serial of the partner to unpair. Only needed if several partners are paired; otherwise it is read from the speaker."
+        }
+      }
     }
   }
 }

@@ -382,3 +382,33 @@ def test_ddms_state_does_not_imply_kleernet_pairing(api):
     st = api.RevoxState(paired=[_paired()], ddms_state="FREE")
     assert st.ddms_state == "FREE"
     assert st.kleernet_paired is True
+
+
+def test_kleernet_partner_serial_is_read_from_the_device(api):
+    """Nothing about unpairing is configured: the serial comes from paired[].
+
+    This is what makes the Unpair button work on anyone's speaker without
+    them knowing or typing a serial number.
+    """
+    st = api.RevoxState(paired=[_paired(ID="SXYZ99999", name="Kitchen")])
+    assert st.kleernet_partner_serial == "SXYZ99999"
+    assert st.kleernet_partner["name"] == "Kitchen"
+
+
+def test_sole_partner_selection_rules(api):
+    """The button may only act when exactly one partner is bound.
+
+    Mirrors RevoxKleernetUnpairButton._sole_partner: zero is nothing to do,
+    and several is ambiguous — the service with an explicit serial covers that.
+    """
+
+    def sole(paired):
+        entries = [p for p in paired if p.get("ID")]
+        return entries[0] if len(entries) == 1 else None
+
+    assert sole([]) is None
+    assert sole([_paired()])["ID"] == "SAAD11958"
+    assert sole([_paired(), _paired(ID="SBBB22222")]) is None
+    # an entry with a blank ID cannot be unpaired and must not count
+    assert sole([_paired(ID="")]) is None
+    assert sole([_paired(), _paired(ID="")])["ID"] == "SAAD11958"
