@@ -27,6 +27,7 @@ async def async_setup_entry(
         [
             RevoxBatteryChargingSensor(coordinator),
             RevoxPairedBatteryChargingSensor(coordinator),
+            RevoxKleernetPairedSensor(coordinator),
         ]
     )
 
@@ -76,3 +77,41 @@ class RevoxPairedBatteryChargingSensor(RevoxEntity, BinarySensorEntity):
             return None
         _soc, charging = parse_battery(st.paired[0].get("battery"))
         return charging
+
+
+class RevoxKleernetPairedSensor(RevoxEntity, BinarySensorEntity):
+    """Whether a Kleernet partner speaker is bound.
+
+    Derived from the paired[] array (group 3 / 0x03), which a full unpair /
+    re-pair packet capture confirmed is the authoritative source. The event
+    0x67 push reports the *DDMS* (Wi-Fi multi-room) state and stayed "FREE"
+    across that entire cycle, so it must not be used for this.
+    """
+
+    _attr_translation_key = "kleernet_paired"
+    _attr_device_class = BinarySensorDeviceClass.CONNECTIVITY
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
+
+    def __init__(self, coordinator: RevoxCoordinator) -> None:
+        super().__init__(coordinator)
+        self._attr_unique_id = f"{self._unique_base}_kleernet_paired"
+
+    @property
+    def is_on(self) -> bool | None:
+        st = self.coordinator.data
+        return None if st is None else st.kleernet_paired
+
+    @property
+    def extra_state_attributes(self) -> dict:
+        st = self.coordinator.data
+        if st is None:
+            return {}
+        partner = st.kleernet_partner or {}
+        return {
+            "partner_name": partner.get("name"),
+            "partner_serial": partner.get("ID"),
+            "partner_type": partner.get("type"),
+            "partner_channel": partner.get("channel"),
+            # channel 0 while a bind is still settling
+            "pairing_in_progress": st.kleernet_pairing,
+        }

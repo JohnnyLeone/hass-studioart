@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import asyncio
+
 from homeassistant.components.button import ButtonDeviceClass, ButtonEntity
 from homeassistant.const import EntityCategory
 from homeassistant.core import HomeAssistant
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .coordinator import RevoxConfigEntry, RevoxCoordinator
@@ -20,7 +23,12 @@ async def async_setup_entry(
 ) -> None:
     coordinator = entry.runtime_data
     async_add_entities(
-        [RevoxRestartButton(coordinator), RevoxCheckP100Button(coordinator)]
+        [
+            RevoxRestartButton(coordinator),
+            RevoxCheckP100Button(coordinator),
+            RevoxKleernetPairModeButton(coordinator),
+            RevoxKleernetUnpairButton(coordinator),
+        ]
     )
 
 
@@ -64,3 +72,55 @@ class RevoxCheckP100Button(RevoxEntity, ButtonEntity):
 
     async def async_press(self) -> None:
         await self.coordinator.client.check_p100()
+
+
+class RevoxKleernetPairModeButton(RevoxEntity, ButtonEntity):
+    """Put the speaker into Kleernet pairing mode (group 3 / 0x01).
+
+    The StudioART app sends this after unpairing; the partner reappeared about
+    eleven seconds later with no further network traffic, so the bind itself
+    runs over the Kleernet radio. The partner speaker may also need putting
+    into pairing mode for it to complete.
+    """
+
+    _attr_translation_key = "kleernet_pair_mode"
+    _attr_entity_category = EntityCategory.CONFIG
+
+    def __init__(self, coordinator: RevoxCoordinator) -> None:
+        super().__init__(coordinator)
+        self._attr_unique_id = f"{self._unique_base}_kleernet_pair_mode"
+
+    async def async_press(self) -> None:
+        await self.coordinator.client.kleernet_pair_mode()
+        await self.coordinator.async_request_refresh()
+
+
+class RevoxKleernetUnpairButton(RevoxEntity, ButtonEntity):
+    """Unpair the bound Kleernet partner speaker (group 3 / 0x05 + serial).
+
+    Only available while a partner is actually bound, since the command needs
+    that partner's serial number. The speaker takes a few seconds to drop it,
+    so the state is re-read after a short delay.
+    """
+
+    _attr_translation_key = "kleernet_unpair"
+    _attr_entity_category = EntityCategory.CONFIG
+
+    def __init__(self, coordinator: RevoxCoordinator) -> None:
+        super().__init__(coordinator)
+        self._attr_unique_id = f"{self._unique_base}_kleernet_unpair"
+
+    @property
+    def available(self) -> bool:
+        st = self.coordinator.data
+        return super().available and bool(st and st.kleernet_partner_serial)
+
+    async def async_press(self) -> None:
+        st = self.coordinator.data
+        serial = st.kleernet_partner_serial if st else None
+        if not serial:
+            raise HomeAssistantError("no Kleernet partner speaker is paired")
+        await self.coordinator.client.kleernet_unpair(serial)
+        # paired[] empties roughly four seconds later (packet-capture timed)
+        await asyncio.sleep(5)
+        await self.coordinator.async_request_refresh()

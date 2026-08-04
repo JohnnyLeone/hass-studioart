@@ -116,26 +116,65 @@ CMD_POWER_ACTION = (2, 0x4D)
 POWER_ACTION_RESTART = 2
 # "Check P100": fire-and-forget probe for a wired P100 partner speaker
 CMD_CHECK_P100 = (3, 0x0F)
+# UNPAIR a partner speaker: the SET of the multi-room triplet (get 0x03, reply
+# 0x04). Payload is the partner's serial number as ASCII, e.g. b"SAAD11958".
+#
+# Verified from a packet capture of the app's unpair/re-pair flow: sending this
+# with the bound partner's serial emptied paired[] ~4 s later. Pairing does NOT
+# happen this way — see kleernet_pair_mode() below.
+SET_UNPAIR_SPEAKER = (3, 0x05)
+# Sent by the app after unpairing, ~11 s before the partner reappeared. Empty
+# payload, never answers. Most likely "enter pairing mode"; the actual bind then
+# happens over the Kleernet radio with nothing on the network.
+CMD_KLEERNET_PAIR_MODE = (3, 0x01)
 
-# Event channel opcodes
+# Event channel opcodes.
+#
+# Port 7777 is Libre's "LUCI" protocol; the Op byte is the LUCI message id.
+# Names in comments below are the message names recovered from the LS9 firmware
+# daemon (/system/bin/luci_service) — see docs/PROTOCOL.md. The message id ==
+# Op mapping was confirmed against every op already verified on the wire.
 _EV_HANDSHAKE = 0x03
-_EV_SOURCE_A = 0x0A  # push: ASCII source id, e.g. "19"
-_EV_PLAYVIEW_A = 0x2A  # push: "PlayView" JSON with now-playing metadata
-_EV_PLAYVIEW_B = 0x2D  # push: duplicate of 0x2A
-_EV_POSITION = 0x31  # push: ASCII playback position in ms, ~1/s while playing
-_EV_SOURCE_B = 0x32  # push: ASCII source id (sent alongside 0x0A)
+_EV_SOURCE_A = 0x0A  # push: ASCII source id, e.g. "19" (firmware: "IsAllowedRequest")
+_EV_PLAYVIEW_A = 0x2A  # "RemoteUI": PlayView JSON with now-playing metadata
+_EV_PLAYVIEW_B = 0x2D  # "RemoteUIPlay": duplicate of 0x2A
+_EV_POSITION = 0x31  # "Current Time": ASCII playback position ms, ~1/s while playing
+_EV_SOURCE_B = 0x32  # "Current Source": ASCII source id (sent alongside 0x0A)
 # NB: the push enum differs from the playback JSON: 0 = playing/active
 # (sent together with SPEAKER_ACTIVE on play), 2 = paused.
-_EV_PLAY_STATE = 0x33
-_EV_VOLUME = 0x40  # query; also pushed with the ASCII volume on changes
-_EV_SPEAKER_ACTIVE = 0x46  # push: "SPEAKER_ACTIVE,<source id>"
-_EV_CHANNEL_STATUS = 0x67
-_EV_ASCII_CMD = 0x6A
-_EV_MIRROR = 0x70
-_EV_QUERY = 0xD0
-_EV_BT_EVENT = 0xD1  # push: e.g. "btdisconnect"
-_EV_SAMPLE_RATE = 0xE6  # push: ASCII sample rate when a stream starts ("48000")
-_EV_STREAM_START = 0xEE  # push: empty marker when a stream starts
+_EV_PLAY_STATE = 0x33  # "Play Status"
+_EV_VOLUME = 0x40  # "volume control": query; also pushed with the ASCII volume
+_EV_SPEAKER_ACTIVE = 0x46  # "host App control": push "SPEAKER_ACTIVE,<source id>"
+_EV_CHANNEL_STATUS = 0x67  # "ddms status": pair-state, e.g. "FREE,STEREO,<ssid>"
+_EV_ASCII_CMD = 0x6A  # "speaker type": carries SETSTEREO/SETLEFT/SETRIGHT/SETFREE/...
+_EV_MIRROR = 0x70  # "Tunnel Data": mirrors every control-port frame the speaker sees
+_EV_QUERY = 0xD0  # "NV Read": READ_<nvitem> -> "<nvitem>:<value>"
+_EV_BT_EVENT = 0xD1  # "BT": push, e.g. "btdisconnect"
+_EV_SAMPLE_RATE = 0xE6  # "AUDIO_OUTPUT_FS": ASCII sample rate on stream start ("48000")
+_EV_STREAM_START = 0xEE  # observed empty stream-start marker (firmware: FORCED_UPDATE?)
+
+# Recovered from firmware, not yet replayed on hardware (see docs/PROTOCOL.md).
+# The pairing verbs are ASCII payloads for _EV_ASCII_CMD (0x6A); the rest are
+# their own ops. Guarded behind explicit methods / the CLI, never sent
+# automatically.
+_EV_NET_STANDBY_START = 0x16  # "NET_STANDBY_START"
+_EV_NET_STANDBY_END = 0x17  # "NET_STANDBY_END"
+_EV_STANDBY_STATUS = 0x18  # "STANDBY_STATUS"
+_EV_REBOOT = 0x72  # "RebootRequest"
+_EV_WIFI_SCAN = 0x48  # "TriggerWifiScan"
+_EV_WIFI_SCAN_RESULTS = 0x49  # "GetWifiScanResults"
+_EV_FACTORY_DEFAULT = 0x96  # "FACTORY_DEFAULT" (destructive)
+_EV_SPEAKER_FW_UPDATE = 0xEC  # "SPEAKER_FW_UPDATE": the app's "update now" trigger
+
+# Grouping/pairing verbs are split across three ops (decompiled from
+# LucicontrolServer::IncomingHouseKeeping) — see docs/PROTOCOL.md:
+#   0x64 "ddms":            SETMASTER/SETSLAVE/SETFREE/JOIN*/DROP*
+#   0x6A "speaker type":    SETLEFT/SETSTEREO/SETRIGHT  (_EV_ASCII_CMD above)
+#   0x6C "StereoPair Mode": MASTERLEFT/MASTERRIGHT/SLAVELEFT/SLAVERIGHT
+# The parser length-checks each verb exactly, so send it bare (no NUL/CRLF).
+_EV_DDMS = 0x64
+_EV_STEREOPAIR_MODE = 0x6C
+CHANNEL_UNPAIR = "SETFREE"  # release the speaker from any pair/group (via 0x64)
 
 
 class RevoxError(Exception):
@@ -189,7 +228,11 @@ class RevoxState:
     multiroom_state: int | None = None
     paired: list[dict[str, Any]] = field(default_factory=list)
     channel: str | None = None  # "STEREO" / "LEFT" / "RIGHT"
-    pair_state: str | None = None  # e.g. "FREE"
+    # DDMS (Wi-Fi multi-room) pair state from event 0x67, e.g. "FREE".
+    # NOT the Kleernet pairing state: a packet capture of a full unpair/re-pair
+    # cycle showed this stuck at "FREE" the whole time while paired[] correctly
+    # went [Büro2] -> [] -> [Büro2]. Use kleernet_paired below instead.
+    ddms_state: str | None = None
     # Kleernet config (group 3, 0x57)
     kleernet_band: int | None = None  # "D83Fre": 0=auto, 1=2.4G, 2=5.2G, 3=5.8G
     dis_auto_aux: bool | None = None
@@ -200,6 +243,34 @@ class RevoxState:
     @property
     def available(self) -> bool:
         return self.name is not None or self.volume is not None
+
+    # -- Kleernet pairing ----------------------------------------------------
+    # The authoritative view is the paired[] array from group 3 / 0x03, which a
+    # packet capture confirmed tracks the real bind (and briefly reports
+    # channel 0 while a pairing completes). Event 0x67 is DDMS and does not.
+
+    @property
+    def kleernet_paired(self) -> bool:
+        """True when a Kleernet partner speaker is bound."""
+        return bool(self.paired)
+
+    @property
+    def kleernet_partner(self) -> dict[str, Any] | None:
+        """The bound partner's entry, or None. A pair is limited to one."""
+        return self.paired[0] if self.paired else None
+
+    @property
+    def kleernet_partner_serial(self) -> str | None:
+        """Serial of the bound partner — the payload unpairing expects."""
+        partner = self.kleernet_partner
+        serial = partner.get("ID") if partner else None
+        return serial or None
+
+    @property
+    def kleernet_pairing(self) -> bool:
+        """True while a bind is still settling (partner present, channel 0)."""
+        partner = self.kleernet_partner
+        return bool(partner) and partner.get("channel") == 0
 
 
 def _build_frame(group: int, cmd: int, payload: bytes = b"") -> bytes:
@@ -445,7 +516,7 @@ class RevoxStudioArtClient:
         """Fold push-only values and fresh push overrides into ``st``."""
         # values that only arrive via pushes — carry them over polls
         st.channel = self._push_cache.get("channel")
-        st.pair_state = self._push_cache.get("pair_state")
+        st.ddms_state = self._push_cache.get("ddms_state")
         st.media_artist = self._push_cache.get("media_artist")
         st.media_album = self._push_cache.get("media_album")
         st.media_duration_ms = self._push_cache.get("media_duration_ms")
@@ -627,6 +698,34 @@ class RevoxStudioArtClient:
         speaker is connected to the A100. No reply is sent on the wire."""
         await self._oneshot(_build_frame(*CMD_CHECK_P100), read_ack_frame=True)
 
+    async def kleernet_unpair(self, serial: str) -> None:
+        """Unpair a Kleernet partner speaker by serial number (group 3 / 0x05).
+
+        ``serial`` is the partner's SN as it appears in the multi-room
+        ``paired[]`` array (``ID``), e.g. ``"SAAD11958"``. Packet-capture
+        verified: ``paired[]`` empties roughly four seconds later, so poll
+        rather than assuming the change is immediate.
+
+        This is *not* how pairing happens — see :meth:`kleernet_pair_mode`.
+        """
+        payload = serial.strip().upper().encode("ascii")
+        if not payload:
+            raise RevoxError("serial number must not be empty")
+        await self._oneshot(
+            _build_frame(*SET_UNPAIR_SPEAKER, payload), read_ack_frame=True
+        )
+
+    async def kleernet_pair_mode(self) -> None:
+        """Ask the speaker to enter Kleernet pairing mode (group 3 / 0x01).
+
+        Fire-and-forget: no reply is sent. In the reference capture the app sent
+        this after unpairing and the partner reappeared ~11 s later, with no
+        further network traffic — the bind itself happens over the Kleernet
+        radio. Interpretation is capture-derived and not independently
+        confirmed; the partner may also need putting into pairing mode.
+        """
+        await self._oneshot(_build_frame(*CMD_KLEERNET_PAIR_MODE), read_ack_frame=True)
+
     async def set_channel(self, channel_cmd: str) -> None:
         """SETSTEREO / SETLEFT / SETRIGHT — via the event channel like the app.
 
@@ -640,6 +739,48 @@ class RevoxStudioArtClient:
             except (OSError, RevoxError):
                 _LOGGER.debug("event channel send failed, falling back to control port")
         await self.async_send_raw_ascii(channel_cmd)
+
+    async def unpair(self) -> None:
+        """Release the speaker from any stereo pair / multi-room group.
+
+        ``SETFREE`` is handled by the *ddms* op (0x64), NOT by the ``speaker
+        type`` op (0x6A) that carries SETSTEREO/SETLEFT/SETRIGHT — 0x6A only
+        compares the three channel verbs and silently ignores anything else.
+        The parser also length-checks the payload exactly, so the verb is sent
+        bare (no NUL, no CRLF). Firmware-derived; see docs/PROTOCOL.md.
+        """
+        await self.async_send_event_op(_EV_DDMS, CHANNEL_UNPAIR.encode("ascii"))
+
+    async def async_send_event_op(
+        self, op: int, payload: bytes = b"", *, expect_reply: bool = False
+    ) -> str | None:
+        """Send a raw LUCI op on the event channel (own one-shot connection).
+
+        Escape hatch for the firmware-recovered ops that don't yet have a
+        dedicated method (reboot 0x72, net-standby 0x16/0x17, fw-update 0xEC,
+        wifi-scan 0x48/0x49, ...). Intended for verification via the CLI, not
+        for automatic use.
+        """
+        reader, writer = await self._open(self._event_port)
+        try:
+            writer.write(_build_event_frame(_EV_HANDSHAKE))
+            writer.write(_build_event_frame(op, payload))
+            await writer.drain()
+            if not expect_reply:
+                return None
+
+            async def _wait() -> str:
+                while True:
+                    rop, _st, rpl = await self._read_event_frame(reader)
+                    if rop == op:
+                        return rpl.decode("utf-8", "replace")
+
+            try:
+                return await asyncio.wait_for(_wait(), timeout=4.0)
+            except (TimeoutError, _EventIdle):
+                return None
+        finally:
+            await self._close(writer)
 
     # -- event channel (port 7777) ------------------------------------------
     def start_events(self, callback: Callable[[dict[str, Any]], None]) -> None:
@@ -762,7 +903,7 @@ class RevoxStudioArtClient:
         # remember push-only values so the next poll does not lose them
         for key in (
             "channel",
-            "pair_state",
+            "ddms_state",
             "media_artist",
             "media_album",
             "media_duration_ms",
@@ -784,7 +925,8 @@ class RevoxStudioArtClient:
             parts = text.split(",")
             partial: dict[str, Any] = {"_activity": True}
             if len(parts) >= 2:
-                partial["pair_state"] = parts[0]
+                # NB: this is the DDMS (Wi-Fi multi-room) state, not Kleernet.
+                partial["ddms_state"] = parts[0]
                 partial["channel"] = parts[1]
             return partial
         if op in (_EV_SOURCE_A, _EV_SOURCE_B) and text.isdigit():
@@ -898,6 +1040,12 @@ class RevoxStudioArtClient:
             return {"power_on_source": value, "_activity": True}
         if (group, cmd) == SET_KLEERNET_BAND:
             return {"kleernet_band": value, "_activity": True}
+        if (group, cmd) == SET_UNPAIR_SPEAKER:
+            # Multi-byte ASCII serial, not a single-byte value: someone
+            # unpairing a partner. The speaker takes a few seconds to drop it,
+            # so just flag activity and let the coordinator re-poll the
+            # multi-room state (group 3 / 0x03) for the authoritative result.
+            return {"_activity": True}
         return {"_activity": True}
 
 

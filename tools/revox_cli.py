@@ -28,12 +28,42 @@ Examples
     python3 revox_cli.py 192.168.42.163 bin 2 0x5b 1      # binary set
     python3 revox_cli.py 192.168.42.163 readq READ_fwdownload_xml   # 0xD0 query
     python3 revox_cli.py 192.168.42.163 watch             # live push events (7777)
+    python3 revox_cli.py 192.168.42.163 kleernet          # full Kleernet/pairing report
+    python3 revox_cli.py 192.168.42.163 kleernet-unpair SAAD11958  # group 3/0x05
+    python3 revox_cli.py 192.168.42.163 kleernet-pairmode         # group 3/0x01
+    python3 revox_cli.py 192.168.42.163 scan 3 0x00 0x40 --i-understand
+
+NV items (LibreEnv property store) via op 0xD0 — READ_/WRITE_ by name. The name
+table was recovered from /system/bin/LibreEnv and verified against a real A100;
+see docs/PROTOCOL.md.
+    python3 revox_cli.py 192.168.42.163 nv FwVersion       # read one item
+    python3 revox_cli.py 192.168.42.163 nvdump             # curated monitoring set
+    python3 revox_cli.py 192.168.42.163 nvdump live        # items seen populated
+    python3 revox_cli.py 192.168.42.163 nvdump all --set   # all 255, hide empties
+    python3 revox_cli.py 192.168.42.163 nvdump --show-secrets   # unmask values
+    python3 revox_cli.py 192.168.42.163 nvwrite LED_INTENSITY 5
+    python3 revox_cli.py - nvlist ddms                     # offline name search
+Secrets (PSK, tokens, URLs, UUIDs) are masked by default so output is safe to
+paste into an issue. Network/boot-critical items need --force to write.
+
+LUCI ops recovered from the LS9 firmware (firmware-derived — verify on your
+speaker; see docs/PROTOCOL.md). These act on the real device:
+    python3 revox_cli.py 192.168.42.163 unpair            # SETFREE via 0x64 (ddms)
+    python3 revox_cli.py 192.168.42.163 ddms dropme       # raw ddms verb (0x64)
+    python3 revox_cli.py 192.168.42.163 pairmode slaveleft  # 0x6C StereoPair Mode
+    python3 revox_cli.py 192.168.42.163 net-standby on    # 0x16 / off = 0x17
+    python3 revox_cli.py 192.168.42.163 standby-status    # 0x18
+    python3 revox_cli.py 192.168.42.163 wifi-scan         # 0x48 (results push on 0x49)
+    python3 revox_cli.py 192.168.42.163 reboot-luci       # 0x72 RebootRequest
+    python3 revox_cli.py 192.168.42.163 fw-update         # 0xEC SPEAKER_FW_UPDATE
+    python3 revox_cli.py 192.168.42.163 event-op 0x97     # generic: <op-hex> [payload]
 """
 
 import json
 import socket
 import struct
 import sys
+import time
 
 PORT = 50007
 EVENT_PORT = 7777
@@ -91,12 +121,23 @@ def _recvn(sock: socket.socket, n: int) -> bytes:
 
 
 def _decode(payload: bytes):
+    """Best-effort payload decode: JSON, single byte, printable ASCII, else hex.
+
+    The ASCII case matters: group 3 / 0x05 carries a bare serial number
+    ("SAAD11958"), which used to render as an opaque hex blob and made the
+    pairing command much harder to recognise on the mirror channel.
+    """
     if not payload:
         return None
     try:
         return json.loads(payload.decode())
     except Exception:
-        return payload[0] if len(payload) == 1 else payload.hex()
+        pass
+    if len(payload) == 1:
+        return payload[0]
+    if all(0x20 <= b < 0x7F for b in payload):
+        return payload.decode("ascii")
+    return payload.hex()
 
 
 def request(host: str, group: int, req_cmd: int, reply_cmd: int):
@@ -110,6 +151,187 @@ def request(host: str, group: int, req_cmd: int, reply_cmd: int):
             if c == reply_cmd:
                 return _decode(payload)
     return None
+
+
+# Commands that are known SETs or fire-and-forget ACTIONS. `scan` sends
+# empty-payload frames, which for a set/action is at best ignored and at worst
+# performs something (0x4D value 0 = unknown power action). Never probe these.
+SCAN_BLOCKLIST = {
+    2: {
+        0x03,  # select source
+        0x2A,  # set volume
+        0x36,  # set loudness
+        0x43,  # set aux high-sens
+        0x4D,  # POWER ACTION (2 = restart) — never poke
+        0x58,  # set power-on source
+        0x5B,  # set auto-power-on
+        0x62,  # set L/R swap
+        0x8F,  # presumed standby-timer set
+        0x9B,  # set Kleernet band
+        0x9E,  # set "disable auto aux"
+    },
+    3: {
+        0x0F,  # Check P100 — fire-and-forget action
+    },
+}
+
+
+def probe(host: str, group: int, cmd: int, timeout: float = 1.0):
+    """Send one empty-payload frame and return every reply frame it produces."""
+    out = []
+    try:
+        with socket.create_connection((host, PORT), timeout=3) as s:
+            s.sendall(build_frame(group, cmd))
+            s.settimeout(timeout)
+            try:
+                while True:
+                    frame = read_frame(s)
+                    if not frame:
+                        break
+                    out.append(frame)
+            except (TimeoutError, OSError):
+                pass
+    except OSError as err:
+        print(f"  connect failed: {err}")
+    return out
+
+
+def scan(
+    host: str,
+    group: int,
+    start: int,
+    end: int,
+    delay: float = 0.15,
+    timeout: float = 1.0,
+) -> None:
+    """Sweep a command range and report what answers, learning the triplets.
+
+    Discovery aid for the group-2/group-3 protocol, which lives on the ATMEL
+    host MCU and so cannot be recovered from the Linux firmware.
+
+    Two hard-won safety properties:
+
+    1. **Sets are inferred as we go.** Settings follow get=N / reply=N+1 /
+       set=N+2. So the moment a probe of N answers with N+1, we know N+2 is a
+       set and skip it. An empty-payload set writes 0 — an early version of this
+       function silently zeroed two unknown group-3 settings that way.
+       A reply of N-1 means N was itself a set, so we stop immediately.
+    2. **Other clients' traffic is filtered out.** The speaker fans replies out
+       to *every* open port-50007 connection, so a scan sees Home Assistant's
+       and the app's poll replies too. Only frames with cmd N or N+1 are
+       attributed to our probe; the rest are counted as background.
+
+    NB: a get also shows up on the mirror channel, so an open StudioART app may
+    flicker its toggles while this runs. That is cosmetic.
+    """
+    blocked = set(SCAN_BLOCKLIST.get(group, set()))
+    learned: dict[int, int] = {}  # set-cmd -> the get it belongs to
+    found = background = 0
+    print(
+        f"# scanning group {group}, cmds {start:#04x}-{end:#04x} "
+        f"({len(blocked)} known sets/actions skipped)"
+    )
+    for cmd in range(start, end + 1):
+        if cmd in blocked:
+            print(f"  {cmd:#04x}  (skipped: known set/action)")
+            continue
+        if cmd in learned:
+            print(
+                f"  {cmd:#04x}  (skipped: inferred SET of the "
+                f"{learned[cmd]:#04x} triplet)"
+            )
+            continue
+
+        frames = probe(host, group, cmd, timeout=timeout)
+        for g, c, payload in frames:
+            val = _decode(payload)
+            if val is None and not payload:
+                continue
+            if g != group or c not in (cmd, cmd + 1):
+                background += 1
+                continue
+            found += 1
+            rel = "reply" if c == cmd + 1 else "echo"
+            print(f"  {cmd:#04x} -> group={g} {rel:<6} {val!r}")
+            if c == cmd + 1:
+                # cmd is a get; its set is cmd+2 and must not be probed
+                learned[cmd + 2] = cmd
+
+        # A reply numbered cmd-1 means we just probed a SET. Bail out rather
+        # than keep writing zeros into unknown settings.
+        for g, c, _p in frames:
+            if g == group and c == cmd - 1:
+                print(
+                    f"  !! {cmd:#04x} answered as {c:#04x} — that makes "
+                    f"{cmd:#04x} a SET, which an empty payload may have "
+                    f"written to 0.\n"
+                    f"  !! Stopping. Read {c - 1:#04x} and restore with: "
+                    f"bin {group} {cmd:#04x} <original>"
+                )
+                return
+        time.sleep(delay)
+    print(
+        f"# {found} responses to our probes, {background} background frames "
+        f"from other clients, {len(learned)} sets inferred and skipped"
+    )
+
+
+# Group 3 has been swept end-to-end (0x00-0xFF). These four triplets answer but
+# their meaning is unknown; they are read-only here (get cmd -> reply cmd).
+# Diffing them between states — partner paired vs unpaired, band changed, L/R
+# swapped — is the way to pin down what they are.
+GROUP3_UNKNOWN = {0x06: 0x07, 0x09: 0x0A, 0x0C: 0x0D, 0x10: 0x11}
+
+
+def kleernet_report(host: str) -> None:
+    """Everything currently known about the Kleernet / multi-room state."""
+    print("== group 3 / 0x03  multi-room state")
+    multi = request(host, 3, 0x03, 0x04)
+    print(f"   {multi!r}")
+    if isinstance(multi, dict):
+        for i, p in enumerate(multi.get("paired") or []):
+            print(f"   paired[{i}]: {p!r}")
+        if not multi.get("paired"):
+            print("   paired[]: (none — no partner speaker bound)")
+
+    print("== group 3 / 0x56  Kleernet config")
+    kleer = request(host, 3, 0x56, 0x57)
+    print(f"   {kleer!r}")
+    if isinstance(kleer, dict):
+        band = {0: "automatic", 1: "2.4 GHz", 2: "5.2 GHz", 3: "5.8 GHz"}
+        print(f"   band (D83Fre) = {band.get(kleer.get('D83Fre'), '?')}")
+        print(f"   Aux-In trigger = {'off' if kleer.get('DisAutoAux') else 'on'}")
+
+    print("== group 3  unidentified triplets (read-only; diff between states)")
+    for get_cmd, reply_cmd in sorted(GROUP3_UNKNOWN.items()):
+        val = request(host, 3, get_cmd, reply_cmd)
+        shown = val.get("value") if isinstance(val, dict) else val
+        ident = val.get("ID") if isinstance(val, dict) else None
+        extra = f"  ID={ident!r}" if ident else ""
+        print(f"   get {get_cmd:#04x} -> value={shown!r}{extra}")
+
+    print("== group 2 / 0x37  device status (Kleernet radio firmware)")
+    dev = request(host, 2, 0x37, 0x38)
+    if isinstance(dev, dict):
+        for k in ("Kleernet", "LS9", "Controler", "mcuType", "SN", "Name"):
+            print(f"   {k:<10} {dev.get(k)!r}")
+
+    print("== event 0x67  DDMS/pair status push (2 s listen)")
+    try:
+        with event_connect(host) as s:
+            s.settimeout(2.0)
+            try:
+                while True:
+                    frame = read_event_frame(s)
+                    if not frame:
+                        break
+                    op, status, payload = frame
+                    if op in (0x67, 0x46):
+                        print(f"   {_fmt_event(op, status, payload)}")
+            except TimeoutError:
+                pass
+    except OSError as err:
+        print(f"   event channel unavailable: {err}")
 
 
 def get_status(host: str) -> dict:
@@ -220,14 +442,668 @@ def event_query(host: str, text: str) -> None:
             print("no reply")
 
 
+# ---------------------------------------------------------------------------
+# NV items (LibreEnv property store), reachable on event-channel op 0xD0:
+#     READ_<name>            -> "<name>:<value>"
+#     WRITE_<name>,<value>   -> sets it, replies with the read-back
+#
+# The name table below was recovered from /system/bin/LibreEnv and VERIFIED
+# against a real A100: the on-flash ENV records store a 1-based UID that indexes
+# exactly into this list, and 8/8 spot-checks matched the UIDs used by
+# luci_service's SetEnvItemByID() calls. Order therefore matters -- do not sort.
+NV_ITEMS = (
+    "SpotifyEnabled",
+    "ssid",
+    "security",
+    "passphrase",
+    "netif",
+    "fw_method",
+    "staticip",
+    "staticipaddr",
+    "fw_upgrade",
+    "spotify_log",
+    "FriendlyName",
+    "FwVersion",
+    "MCUVersion",
+    "CUSTVersion",
+    "telnet",
+    "hostpresent",
+    "onetouchurl",
+    "uuid",
+    "AirplayPassword",
+    "ddms_SSID",
+    "WACMode",
+    "seednv",
+    "airplay",
+    "DDMSOOHmode",
+    "autoip",
+    "CastSetup",
+    "MCULatency",
+    "activeinterface",
+    "p2p_state",
+    "ddms_BAND",
+    "zoneid",
+    "ddms_sp_type",
+    "fw_port",
+    "SP_BLOB",
+    "SP_USERNAME",
+    "spotifyPid",
+    "factory_reset",
+    "current_volume",
+    "LRCK",
+    "boot_after_factory",
+    "WAC_SSID",
+    "ACPpresent",
+    "Model",
+    "Manufacturer",
+    "sdcard_playindex",
+    "ddms_password",
+    "MCLK",
+    "xmodem_pkt_size",
+    "AirPlayMetaData",
+    "BTCLK",
+    "ControllerID",
+    "ControllerPublicKey",
+    "HKAccessoryPassword",
+    "HKAccessoryUUID",
+    "ddms_channel",
+    "SPT_Preset1",
+    "SPT_Preset2",
+    "SPT_Preset3",
+    "ScheduledUpdateTime",
+    "CloudLogInfo",
+    "speechvolume",
+    "dmrPId",
+    "Location",
+    "spotVol",
+    "ddms_rate",
+    "AcpToLS",
+    "DNS",
+    "BT_CONTROLLER",
+    "concurrent_SSID",
+    "QPlay_MID",
+    "QPlay_HashKey",
+    "LEDControl",
+    "netmask",
+    "gateway",
+    "primdns",
+    "secdns",
+    "ddms_stream_type",
+    "wifiband",
+    "ddmstranscode",
+    "mramode",
+    "LSHOST",
+    "AutoWac",
+    "SDDPEnable",
+    "SDDPVersion",
+    "SDDPType",
+    "SDDPPrimaryProxy",
+    "SDDPProxies",
+    "SDDPDriver",
+    "SDDPMaxAge",
+    "SDDPConfig_URL",
+    "AirPlay_TestDelay",
+    "PlayerLatency",
+    "BT_DeviceName",
+    "SpotifyAppkey",
+    "Country",
+    "DLNA_ConnClosed",
+    "HOST_BAUDRATE",
+    "fwupdate_link",
+    "fwdownload_xml",
+    "AlbumArtMaxSizeKB",
+    "Serial_num",
+    "Model_num",
+    "Hardware_version",
+    "Firmware_version",
+    "HTTPHost",
+    "DeezerUserName",
+    "DeezerUserPassword",
+    "ExternalDAC",
+    "TidalUserName",
+    "TidalUserPassword",
+    "PlayerState",
+    "SpotifyDDMSMasterName",
+    "LuciTcpConnectionLimit",
+    "LED_RGB",
+    "LED_INTENSITY",
+    "LED_FLASHING",
+    "LED_DEVICE",
+    "LED_AMBER",
+    "LED_WHITE",
+    "GEN_FAV_0",
+    "GEN_FAV_1",
+    "GEN_FAV_2",
+    "GEN_FAV_3",
+    "GEN_FAV_4",
+    "GEN_FAV_5",
+    "GEN_FAV_6",
+    "GEN_FAV_7",
+    "GEN_FAV_8",
+    "GEN_FAV_9",
+    "LastPlayedURL",
+    "disable_eth_phy",
+    "append_macid",
+    "HN_SSID_0",
+    "AirableBaseURL",
+    "AirableSecret",
+    "AirableAuth",
+    "AirableLanguage",
+    "RoonOutputType",
+    "current_mute",
+    "CloudEndPointUrl",
+    "HN_PASSPHRASE_0",
+    "QobuzUserName",
+    "QobuzUserPassword",
+    "NapsterUserName",
+    "NapsterUserPassword",
+    "HiResUserName",
+    "HiResUserPassword",
+    "CloudProductKey",
+    "MultipleSSIDEnabled",
+    "HostUiEnabled",
+    "DirectPrefixSet",
+    "Scene_Name",
+    "HostIP",
+    "I2S_Master",
+    "RedirectionUrl",
+    "NTP_Server",
+    "eastechcust",
+    "DMRDisable",
+    "BT_BAUDRATE",
+    "UART_Mode",
+    "psm_timer_based_triggers",
+    "psm_no_nw_pb_inact_tmr",
+    "psm_hn_nw_pb_inact_tmr",
+    "psm_nw_stdby_inact_tmr",
+    "OOH_SSID",
+    "3gbridging",
+    "CloudServer",
+    "CloudPort",
+    "fwupdate_success",
+    "IPADDR",
+    "REMOTE_BD_ADDR",
+    "otaupdate_link",
+    "cast_version",
+    "spdif",
+    "vTunerLoginURL",
+    "vTunerLoginURLBackUp",
+    "vTunerSearchURL",
+    "vTunerSearchURLBackup",
+    "BlowfishKey",
+    "BlowfishInitialVector",
+    "vTunerTokenURL",
+    "vTunerTokenURLBackUp",
+    "SoundQuality",
+    "CustomerId",
+    "WEPKeyIndex",
+    "SPKFWVersion",
+    "SingleSpeaker",
+    "ProductName",
+    "FactoryCountry",
+    "GoogleCast",
+    "ShareTimeout",
+    "TimeZoneCast",
+    "CastTOS",
+    "outputfs",
+    "HardwarePlatform",
+    "Brand",
+    "ProductType",
+    "ProductReleaseTrack",
+    "ProductBuildType",
+    "ProductBuildUser",
+    "appsourcelist",
+    "StereoPairMode",
+    "StereoPairTimeOut",
+    "CastSSIDSuffix",
+    "SlaveFollowMasterVol",
+    "SMUserName",
+    "SMUserPassword",
+    "SAModeUnicast",
+    "IsFDR",
+    "RebootSource",
+    "SpotifyClientId",
+    "NG_Attack",
+    "NG_Release",
+    "NG_Hold_time_Down",
+    "NG_Hold_time_Up",
+    "NG_Lower_Threshold",
+    "NG_Upper_Threshold",
+    "UIcount",
+    "LUCIBLE",
+    "CRCenable",
+    "USBalbumart",
+    "BTAAC",
+    "AlexaRefreshToken",
+    "AlexaClientID",
+    "privacyMode",
+    "AlexaProductID",
+    "CurrentLocale",
+    "Endpointurl",
+    "MCG_state",
+    "InputSharing",
+    "LSMSUUID",
+    "BT_Delay",
+    "AP_ProductType",
+    "LipSync_SSID",
+    "LipSync_DC",
+    "HostAP_ssid",
+    "HostAP_security",
+    "HostAP_passphrase",
+    "Lipsync_state",
+    "Lipsync_channel",
+    "antdiv",
+    "SpotifyProductID",
+    "SpotifySpeakerType",
+    "GCASTVersion",
+    "append_btmacid",
+    "Language",
+    "CastPlayerLatency",
+    "antennatype",
+    "RoonEnable",
+    "DOP_ENABLED",
+    "RoonMRALatency",
+    "AlexaDTID",
+    "MRMPlayOffset",
+    "mrmnominaldriftppm",
+    "EnvItems",
+)
+
+# Observed actually populated on a live A100 (firmware LS9 3957 / MCU 44).
+# These are the ones most likely to return a value rather than an empty string.
+NV_LIVE = (
+    "ssid",
+    "security",
+    "FriendlyName",
+    "FwVersion",
+    "MCUVersion",
+    "uuid",
+    "WACMode",
+    "zoneid",
+    "ddms_sp_type",
+    "current_volume",
+    "boot_after_factory",
+    "Location",
+    "DNS",
+    "concurrent_SSID",
+    "BT_DeviceName",
+    "HTTPHost",
+    "LastPlayedURL",
+    "Scene_Name",
+    "HostIP",
+    "IPADDR",
+    "REMOTE_BD_ADDR",
+    "cast_version",
+    "GoogleCast",
+    "CastTOS",
+)
+
+# Default read set: useful for monitoring, safe (read-only).
+NV_MONITOR = (
+    # firmware / versions
+    "Firmware_version",
+    "FwVersion",
+    "MCUVersion",
+    "CUSTVersion",
+    "SPKFWVersion",
+    "GCASTVersion",
+    "cast_version",
+    "Hardware_version",
+    "HardwarePlatform",
+    # identity
+    "Serial_num",
+    "Model",
+    "Model_num",
+    "Manufacturer",
+    "Brand",
+    "ProductName",
+    "ProductType",
+    "SingleSpeaker",
+    "FriendlyName",
+    "uuid",
+    # playback / state
+    "current_volume",
+    "current_mute",
+    "PlayerState",
+    "RebootSource",
+    "LastPlayedURL",
+    "Scene_Name",
+    # multiroom / DDMS
+    "StereoPairMode",
+    "StereoPairTimeOut",
+    "ddms_sp_type",
+    "ddms_channel",
+    "ddms_SSID",
+    "ddms_BAND",
+    "ddms_rate",
+    "zoneid",
+    "mramode",
+    "hostpresent",
+    # network
+    "ssid",
+    "netif",
+    "activeinterface",
+    "wifiband",
+    "IPADDR",
+    "staticip",
+    "netmask",
+    "gateway",
+    "primdns",
+    "secdns",
+    "Country",
+    # feature flags
+    "telnet",
+    "GoogleCast",
+    "CastTOS",
+    "SpotifyEnabled",
+    "airplay",
+    "WACMode",
+    "RoonEnable",
+    "DMRDisable",
+    "SDDPEnable",
+    # LEDs / audio
+    "LEDControl",
+    "LED_INTENSITY",
+    "LED_RGB",
+    "SoundQuality",
+    "outputfs",
+    "PlayerLatency",
+    "MCULatency",
+    # presets / favourites
+    "GEN_FAV_0",
+    "GEN_FAV_1",
+    "GEN_FAV_2",
+    "GEN_FAV_3",
+    "GEN_FAV_4",
+    "SPT_Preset1",
+    "SPT_Preset2",
+    "SPT_Preset3",
+    # bluetooth
+    "BT_DeviceName",
+    "REMOTE_BD_ADDR",
+    # update
+    "fwdownload_xml",
+    "fwupdate_link",
+    "otaupdate_link",
+    "ScheduledUpdateTime",
+    "fwupdate_success",
+)
+
+# Values that are secrets or personally identifying. `nvdump` masks these unless
+# --show-secrets is passed, so its output can be pasted into a bug report.
+NV_SECRET = frozenset(
+    {
+        "passphrase",
+        "security",
+        "ssid",
+        "AirplayPassword",
+        "ddms_password",
+        "SP_BLOB",
+        "SP_USERNAME",
+        "HKAccessoryPassword",
+        "HKAccessoryUUID",
+        "ControllerPublicKey",
+        "ControllerID",
+        "uuid",
+        "LSMSUUID",
+        "Location",
+        "seednv",
+        "AirableAuth",
+        "AirableSecret",
+        "CloudProductKey",
+        "CloudLogInfo",
+        "QPlay_HashKey",
+        "QPlay_MID",
+        "BlowfishKey",
+        "BlowfishInitialVector",
+        "SpotifyAppkey",
+        "SpotifyClientId",
+        "AlexaRefreshToken",
+        "AlexaClientID",
+        "DeezerUserName",
+        "DeezerUserPassword",
+        "TidalUserName",
+        "TidalUserPassword",
+        "QobuzUserName",
+        "QobuzUserPassword",
+        "NapsterUserName",
+        "NapsterUserPassword",
+        "HiResUserName",
+        "HiResUserPassword",
+        "SMUserName",
+        "SMUserPassword",
+        "HostAP_ssid",
+        "HostAP_passphrase",
+        "HostAP_security",
+        "HN_SSID_0",
+        "HN_PASSPHRASE_0",
+        "WAC_SSID",
+        "OOH_SSID",
+        "ddms_SSID",
+        "concurrent_SSID",
+        "LipSync_SSID",
+        "REMOTE_BD_ADDR",
+        "onetouchurl",
+        "LastPlayedURL",
+        "IPADDR",
+        "HostIP",
+        "HTTPHost",
+        "staticipaddr",
+        "DNS",
+        "primdns",
+        "secdns",
+        "gateway",
+        "netmask",
+        "CustomerId",
+        "CloudEndPointUrl",
+        "Endpointurl",
+        "RedirectionUrl",
+        "CloudServer",
+        "LSHOST",
+        "GEN_FAV_0",
+        "GEN_FAV_1",
+        "GEN_FAV_2",
+        "GEN_FAV_3",
+        "GEN_FAV_4",
+        "GEN_FAV_5",
+        "GEN_FAV_6",
+        "GEN_FAV_7",
+        "GEN_FAV_8",
+        "GEN_FAV_9",
+        "SPT_Preset1",
+        "SPT_Preset2",
+        "SPT_Preset3",
+    }
+)
+
+# Writing these can take the speaker off the network, wipe it, or lock you out.
+# `nvwrite` refuses them unless --force is given.
+NV_DANGEROUS = frozenset(
+    {
+        "ssid",
+        "security",
+        "passphrase",
+        "netif",
+        "staticip",
+        "staticipaddr",
+        "netmask",
+        "gateway",
+        "primdns",
+        "secdns",
+        "DNS",
+        "autoip",
+        "factory_reset",
+        "boot_after_factory",
+        "IsFDR",
+        "disable_eth_phy",
+        "fw_method",
+        "fw_upgrade",
+        "fw_port",
+        "seednv",
+        "uuid",
+        "HostAP_ssid",
+        "HostAP_passphrase",
+        "HostAP_security",
+        "append_macid",
+        "append_btmacid",
+        "antdiv",
+        "antennatype",
+        "MCLK",
+        "LRCK",
+        "BTCLK",
+        "HOST_BAUDRATE",
+        "BT_BAUDRATE",
+        "UART_Mode",
+        "xmodem_pkt_size",
+        "I2S_Master",
+        "ExternalDAC",
+    }
+)
+
+
+def nv_valid(name: str) -> bool:
+    return name in NV_ITEMS
+
+
+def nv_suggest(name: str) -> list:
+    """Case-insensitive / substring suggestions for a mistyped NV name."""
+    low = name.lower()
+    exact = [n for n in NV_ITEMS if n.lower() == low]
+    if exact:
+        return exact
+    return [n for n in NV_ITEMS if low in n.lower()][:8]
+
+
+def nv_mask(name: str, value: str, show_secrets: bool = False) -> str:
+    if value and name in NV_SECRET and not show_secrets:
+        return f"<redacted {len(value)} chars>"
+    return value
+
+
+def _nv_read_one(sock: socket.socket, name: str, timeout: float = 2.0):
+    """Send READ_<name> on an open event socket; return the value or None."""
+    sock.sendall(build_event_frame(0xD0, ("READ_" + name).encode()))
+    sock.settimeout(timeout)
+    try:
+        while True:
+            frame = read_event_frame(sock)
+            if not frame:
+                return None
+            op, status, payload = frame
+            if op != 0xD0:
+                continue
+            if status == 2:  # firmware signals failure with status byte 2
+                return None
+            text = payload.decode("utf-8", "replace")
+            prefix = name + ":"
+            return text[len(prefix) :] if text.startswith(prefix) else text
+    except TimeoutError:
+        return None
+
+
+def nvdump(host: str, names, show_secrets: bool = False, only_set: bool = False):
+    """READ_ each NV item over one connection; print name -> value.
+
+    Secrets are masked unless show_secrets, so output is safe to paste into an
+    issue. only_set hides empty/unsupported items.
+    """
+    shown = populated = 0
+    with event_connect(host) as s:
+        for name in names:
+            val = _nv_read_one(s, name)
+            if val:
+                populated += 1
+            elif only_set:
+                continue
+            shown += 1
+            print(f"{name:26} {nv_mask(name, val, show_secrets) if val else '(empty)'}")
+    print(f"\n# {populated} populated / {shown} shown / {len(tuple(names))} queried")
+
+
+def nvwrite(host: str, name: str, value: str, force: bool = False) -> None:
+    """WRITE_<name>,<value> on op 0xD0, then show the read-back.
+
+    The firmware splits the payload on the FIRST comma, so values may contain
+    commas. Some items only take effect after a service or speaker restart, so a
+    successful read-back is not proof the change is live.
+    """
+    if not nv_valid(name):
+        print(f"unknown NV item {name!r}")
+        alts = nv_suggest(name)
+        if alts:
+            print("did you mean:", ", ".join(alts))
+        return
+    if name in NV_DANGEROUS and not force:
+        print(
+            f"refusing to write {name!r}: this can take the speaker off the\n"
+            f"network, wipe it, or lock you out. Re-run with --force if you\n"
+            f"really mean it."
+        )
+        return
+    with event_connect(host) as s:
+        before = _nv_read_one(s, name)
+        print(f"before: {name} = {nv_mask(name, before) if before else '(empty)'}")
+        s.sendall(build_event_frame(0xD0, f"WRITE_{name},{value}".encode()))
+        s.settimeout(3.0)
+        try:
+            while True:
+                frame = read_event_frame(s)
+                if not frame:
+                    break
+                op, status, payload = frame
+                if op == 0xD0:
+                    if status == 2:
+                        print("write FAILED (status 2)")
+                    else:
+                        print("reply :", payload.decode("utf-8", "replace"))
+                    break
+        except TimeoutError:
+            print("no reply to write")
+        after = _nv_read_one(s, name)
+        print(f"after : {name} = {nv_mask(name, after) if after else '(empty)'}")
+        if after == before:
+            print("note: value unchanged — may need a restart, or is read-only")
+
+
+def event_op(host: str, op: int, payload: bytes = b"", listen: float = 2.5) -> None:
+    """Send a raw LUCI op on the event channel and print any frames that arrive.
+
+    For the firmware-recovered ops (reboot 0x72, net-standby 0x16/0x17,
+    fw-update 0xEC, ...); see docs/PROTOCOL.md. Firmware-derived, so verify the
+    effect on your own speaker.
+    """
+    with event_connect(host) as s:
+        s.sendall(build_event_frame(op, payload))
+        s.settimeout(listen)
+        try:
+            while True:
+                frame = read_event_frame(s)
+                if not frame:
+                    break
+                print(_fmt_event(*frame))
+        except TimeoutError:
+            pass
+
+
 def _fmt_event(op: int, status: int, payload: bytes) -> str:
     label = {
         0x03: "handshake",
+        0x16: "net-standby-start",
+        0x17: "net-standby-end",
+        0x18: "standby-status",
         0x40: "volume",
+        0x48: "wifi-scan",
+        0x49: "wifi-scan-results",
+        0x64: "ddms",
         0x67: "channel-status",
+        0x6C: "stereopair-mode",
         0x6A: "ascii-ack",
         0x70: "mirror",
+        0x72: "reboot-request",
+        0x97: "rssi",
         0xD0: "query-reply",
+        0xE8: "battery-power",
+        0xEC: "speaker-fw-update",
     }.get(op, f"op 0x{op:02x}")
     if op == 0x70 and len(payload) >= 5:
         length = struct.unpack(">H", payload[0:2])[0]
@@ -297,6 +1173,33 @@ def main() -> int:
                 rest[0].lower()
             ],
         )
+    elif verb == "unpair":
+        # SETFREE is handled by the ddms op 0x64, NOT by 0x6A (which only knows
+        # SETLEFT/SETSTEREO/SETRIGHT). Payload length is checked exactly.
+        event_op(host, 0x64, b"SETFREE")
+    elif verb == "ddms":
+        # raw ddms verb: SETMASTER|SETSLAVE|SETFREE|JOINTO|JOINALL|JOINNEXT|
+        # JOINNEXTLEFT|JOINNEXTRIGHT|DROPALL|DROPME
+        event_op(host, 0x64, rest[0].upper().encode())
+    elif verb == "pairmode":
+        # MASTERLEFT|MASTERRIGHT|SLAVELEFT|SLAVERIGHT via 0x6C
+        event_op(host, 0x6C, rest[0].upper().encode())
+    elif verb == "reboot-luci":
+        event_op(host, 0x72)  # RebootRequest (LUCI path; drops off the network)
+    elif verb == "net-standby":
+        # on -> NET_STANDBY_START (0x16), off -> NET_STANDBY_END (0x17)
+        event_op(host, 0x16 if rest[0].lower() in ("on", "1", "start") else 0x17)
+    elif verb == "standby-status":
+        event_op(host, 0x18)  # STANDBY_STATUS
+    elif verb == "wifi-scan":
+        event_op(host, 0x48)  # TriggerWifiScan; results push on 0x49
+    elif verb == "fw-update":
+        # SPEAKER_FW_UPDATE (0xEC): the app's "update now" trigger. Only useful
+        # if a firmware is actually published; the update server was empty.
+        event_op(host, 0xEC)
+    elif verb == "event-op":
+        # generic: event-op <op-hex> [ascii-payload]
+        event_op(host, int(rest[0], 0), rest[1].encode() if len(rest) > 1 else b"")
     elif verb == "cmd":
         send_cmd(host, rest[0])
     elif verb == "raw":
@@ -308,6 +1211,101 @@ def main() -> int:
         send_bin(host, int(rest[0], 0), int(rest[1], 0), int(rest[2], 0))
     elif verb == "readq":
         event_query(host, rest[0])
+    elif verb == "nv":
+        # READ_<name>, e.g. `nv FwVersion`
+        name = rest[0]
+        if not nv_valid(name):
+            print(f"unknown NV item {name!r}")
+            alts = nv_suggest(name)
+            if alts:
+                print("did you mean:", ", ".join(alts))
+            return 1
+        event_query(host, "READ_" + name)
+    elif verb == "nvwrite":
+        nvwrite(host, rest[0], rest[1], force="--force" in rest)
+    elif verb == "nvdump":
+        show = "--show-secrets" in rest
+        only_set = "--set" in rest
+        sel = [a for a in rest if not a.startswith("--")]
+        group = sel[0].lower() if sel else ""
+        if group == "all":
+            names = NV_ITEMS
+        elif group == "live":
+            names = NV_LIVE
+        elif sel:
+            names = sel
+        else:
+            names = NV_MONITOR
+        nvdump(host, names, show_secrets=show, only_set=only_set)
+    elif verb == "kleernet":
+        kleernet_report(host)
+    elif verb == "kleernet-unpair":
+        # group 3 / 0x05 + partner serial = UNPAIR (packet-capture verified:
+        # paired[] emptied ~4 s later). NOT the pair command.
+        sn = rest[0].strip().upper()
+        with socket.create_connection((host, PORT), timeout=4) as s:
+            s.sendall(build_frame(3, 0x05, sn.encode("ascii")))
+            s.settimeout(2.0)
+            try:
+                frame = read_frame(s)
+                if frame:
+                    g, c, payload = frame
+                    print(f"ack: group={g} cmd=0x{c:02x} {_decode(payload)!r}")
+                else:
+                    print(f"sent unpair {sn} (no ack)")
+            except (TimeoutError, OSError):
+                print(f"sent unpair {sn} (no ack)")
+        print("takes a few seconds; poll with: kleernet")
+    elif verb == "kleernet-pairmode":
+        # group 3 / 0x01, empty payload, no reply. The app sends this after an
+        # unpair; the partner reappeared ~11 s later with no further traffic.
+        with socket.create_connection((host, PORT), timeout=4) as s:
+            s.sendall(build_frame(3, 0x01))
+            s.settimeout(1.5)
+            answered = False
+            try:
+                while True:
+                    frame = read_frame(s)
+                    if not frame:
+                        break
+                    g, c, payload = frame
+                    # The speaker fans every reply out to all connections, so
+                    # most of what arrives here belongs to other clients.
+                    if g == 3 and c in (0x01, 0x02):
+                        answered = True
+                        print(f"reply: group={g} cmd=0x{c:02x} {_decode(payload)!r}")
+                        break
+            except (TimeoutError, OSError):
+                pass
+            if not answered:
+                print("sent (no reply, as expected)")
+        print("the bind happens over the Kleernet radio; poll with: kleernet")
+    elif verb == "scan":
+        # scan <group> [start] [end] --i-understand
+        group = int(rest[0], 0) if rest else 3
+        sel = [a for a in rest if not a.startswith("--")]
+        start = int(sel[1], 0) if len(sel) > 1 else 0x00
+        end = int(sel[2], 0) if len(sel) > 2 else 0xFF
+        if "--i-understand" not in rest:
+            print(
+                "scan sweeps a command range with empty-payload frames.\n"
+                "Known sets/actions are skipped, but UNKNOWN commands may still\n"
+                "be sets or actions on the ATMEL MCU — there is a real chance of\n"
+                "changing a setting or triggering something.\n\n"
+                "Safer first: run `watch` and poke the StudioART app instead.\n\n"
+                f"To proceed: {sys.argv[0]} {host} scan {group} "
+                f"{start:#04x} {end:#04x} --i-understand"
+            )
+            return 1
+        scan(host, group, start, end)
+    elif verb == "nvlist":
+        # offline: print the known NV names (no device needed)
+        pat = rest[0].lower() if rest else ""
+        hits = [n for n in NV_ITEMS if pat in n.lower()]
+        for i, n in enumerate(NV_ITEMS):
+            if n in hits:
+                print(f"  uid {i + 1:>3}  {n}")
+        print(f"# {len(hits)} of {len(NV_ITEMS)} names")
     elif verb == "watch":
         watch(host)
     else:

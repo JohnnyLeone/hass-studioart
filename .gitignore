@@ -4,3 +4,14 @@ __pycache__/
 .claude/
 .ruff_cache/
 .pytest_cache/
+
+# Firmware images and device dumps — NEVER commit these.
+# The NV/ENV partitions (senv/cenv/fenv) and localstorage contain live device
+# secrets: Wi-Fi PSK, service API credentials, tokens, UUIDs, GPS coordinates
+# and private URLs. The factory partitions carry per-device certs/keys, and the
+# firmware ships an SSH host key that is identical on every unit.
+fw/
+*.img
+*.bin
+83_IMAGE_NETWORK*
+.omx/

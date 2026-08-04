@@ -101,11 +101,17 @@ def test_parse_event_volume(api):
     assert client._parse_event(0x40, b"55") == {"volume": 55, "_activity": True}
 
 
-def test_parse_event_channel_status(api):
+def test_parse_event_channel_status_is_ddms_not_kleernet(api):
+    """0x67 reports DDMS (Wi-Fi multi-room) state, never Kleernet pairing.
+
+    A packet capture of a full unpair/re-pair cycle showed this stuck at "FREE"
+    while paired[] correctly went [Buero2] -> [] -> [Buero2].
+    """
     client = _client(api)
     partial = client._parse_event(0x67, b"FREE,STEREO,RevoxA10028C65AHN")
-    assert partial["pair_state"] == "FREE"
+    assert partial["ddms_state"] == "FREE"
     assert partial["channel"] == "STEREO"
+    assert "pair_state" not in partial
 
 
 def test_parse_event_position_is_instant_play_signal(api):
@@ -275,13 +281,13 @@ def test_overlay_carries_push_only_values(api):
     client = _client(api)
     client._push_cache = {
         "channel": "STEREO",
-        "pair_state": "FREE",
+        "ddms_state": "FREE",
         "media_artist": "Artist",
     }
     st = client._state_from_polls(DEV, PLAY, MULTI, KLEER, TIMER)
     client._overlay_pushed_values(st)
     assert st.channel == "STEREO"
-    assert st.pair_state == "FREE"
+    assert st.ddms_state == "FREE"
     assert st.media_artist == "Artist"
 
 
@@ -305,3 +311,74 @@ def test_state_available(api):
     assert not api.RevoxState().available
     assert api.RevoxState(name="X").available
     assert api.RevoxState(volume=1).available
+
+
+def test_unpair_speaker_frame(api):
+    """group 3 / 0x05 + partner serial = UNPAIR (packet-capture verified).
+
+    Do not rename this to "pair": a capture of the app's unpair/re-pair flow
+    showed this command emptying paired[] ~4 s later, while the subsequent
+    re-pair produced no port-50007 traffic at all.
+    """
+    frame = api._build_frame(*api.SET_UNPAIR_SPEAKER, b"SAAD11958")
+    # [len u16][group u16][cmd u8][payload]
+    assert frame[0:2] == b"\x00\x0c"  # 2 + 1 + 9
+    assert frame[2:4] == b"\x00\x03"  # group 3
+    assert frame[4] == 0x05
+    assert frame[5:] == b"SAAD11958"
+
+
+def test_kleernet_pair_mode_frame(api):
+    """group 3 / 0x01, empty payload, no reply."""
+    frame = api._build_frame(*api.CMD_KLEERNET_PAIR_MODE)
+    assert frame == b"\x00\x03\x00\x03\x01"
+
+
+def test_mirrored_pair_set_is_not_misparsed(api):
+    """data[0] is 'S' (0x53) — must not be read as a single-byte value."""
+    out = api.RevoxStudioArtClient._parse_mirrored_set(3, 0x05, b"SAAD11958")
+    assert out == {"_activity": True}
+    assert "kleernet_band" not in out and "source" not in out
+
+
+# -- Kleernet pairing (paired[] is authoritative, not event 0x67) ------------
+
+
+def _paired(**over):
+    entry = {
+        "type": "A100",
+        "name": "Buero2",
+        "ID": "SAAD11958",
+        "volume": 12,
+        "channel": 1,
+        "battery": 255,
+    }
+    entry.update(over)
+    return entry
+
+
+def test_kleernet_paired_reflects_paired_array(api):
+    assert api.RevoxState(paired=[_paired()]).kleernet_paired is True
+    assert api.RevoxState(paired=[]).kleernet_paired is False
+
+
+def test_kleernet_partner_serial_is_the_unpair_payload(api):
+    st = api.RevoxState(paired=[_paired()])
+    assert st.kleernet_partner_serial == "SAAD11958"
+    assert api.RevoxState(paired=[]).kleernet_partner_serial is None
+    # an empty ID must not be offered as a serial
+    assert api.RevoxState(paired=[_paired(ID="")]).kleernet_partner_serial is None
+
+
+def test_kleernet_pairing_in_progress_is_channel_zero(api):
+    """The capture showed channel pass through 0 while a bind settles."""
+    assert api.RevoxState(paired=[_paired(channel=0)]).kleernet_pairing is True
+    assert api.RevoxState(paired=[_paired(channel=1)]).kleernet_pairing is False
+    assert api.RevoxState(paired=[]).kleernet_pairing is False
+
+
+def test_ddms_state_does_not_imply_kleernet_pairing(api):
+    """The exact situation from the capture: DDMS FREE while a partner is bound."""
+    st = api.RevoxState(paired=[_paired()], ddms_state="FREE")
+    assert st.ddms_state == "FREE"
+    assert st.kleernet_paired is True

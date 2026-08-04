@@ -89,6 +89,9 @@
       },
       "paired_battery_charging": {
         "name": "Paired speaker battery charging"
+      },
+      "kleernet_paired": {
+        "name": "Partner speaker paired"
       }
     },
     "button": {
@@ -97,6 +100,12 @@
       },
       "check_p100": {
         "name": "Check P100"
+      },
+      "kleernet_pair_mode": {
+        "name": "Pair speaker"
+      },
+      "kleernet_unpair": {
+        "name": "Unpair speaker"
       }
     }
   },

@@ -3,6 +3,12 @@
     "button": {
       "check_p100": {
         "default": "mdi:speaker"
+      },
+      "kleernet_pair_mode": {
+        "default": "mdi:link-variant-plus"
+      },
+      "kleernet_unpair": {
+        "default": "mdi:link-variant-off"
       }
     },
     "number": {
@@ -56,6 +62,14 @@
       },
       "bass_boost": {
         "default": "mdi:speaker"
+      }
+    },
+    "binary_sensor": {
+      "kleernet_paired": {
+        "default": "mdi:speaker-multiple",
+        "state": {
+          "off": "mdi:speaker-off"
+        }
       }
     }
   },

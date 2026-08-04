@@ -69,7 +69,9 @@ class RevoxChannelSelect(RevoxEntity, SelectEntity):
     @property
     def extra_state_attributes(self) -> dict:
         st = self.coordinator.data
-        return {"pair_state": st.pair_state if st else None}
+        # ddms_state is the Wi-Fi multi-room state; Kleernet pairing is
+        # reported separately by the "Partner speaker paired" binary sensor.
+        return {"ddms_state": st.ddms_state if st else None}
 
     async def async_select_option(self, option: str) -> None:
         cmd = CHANNEL_COMMANDS.get(option)

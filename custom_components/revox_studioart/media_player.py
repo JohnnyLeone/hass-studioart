@@ -177,7 +177,9 @@ class RevoxMediaPlayer(RevoxEntity, MediaPlayerEntity):
             "paired_speakers": [p.get("name") for p in st.paired],
             "paired_details": st.paired or None,
             "multiroom_channel": st.channel,
-            "pair_state": st.pair_state,
+            "kleernet_paired": st.kleernet_paired,
+            "kleernet_partner_serial": st.kleernet_partner_serial,
+            "ddms_state": st.ddms_state,
             "lr_reverse": st.lr_reverse,
             "raw_source_index": st.source,
         }
