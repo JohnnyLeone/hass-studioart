@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 from homeassistant.components.binary_sensor import (
     BinarySensorDeviceClass,
     BinarySensorEntity,
@@ -12,7 +14,7 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from .api import parse_battery
 from .coordinator import RevoxConfigEntry, RevoxCoordinator
-from .entity import RevoxEntity
+from .entity import RevoxEntity, RevoxPartnerEntity
 
 PARALLEL_UPDATES = 0
 
@@ -36,8 +38,8 @@ class RevoxBatteryChargingSensor(RevoxEntity, BinarySensorEntity):
     """Whether the speaker's battery is charging (battery byte 254).
 
     This is where the app's "Charging" status lives: the battery sensor
-    stays numeric (for graphs/statistics) and shows unknown while charging,
-    since the speaker reports no SoC then.
+    stays numeric (for graphs/statistics) and holds the last known SoC while
+    charging, since the speaker reports none then.
     """
 
     _attr_translation_key = "battery_charging"
@@ -45,8 +47,7 @@ class RevoxBatteryChargingSensor(RevoxEntity, BinarySensorEntity):
     _attr_entity_category = EntityCategory.DIAGNOSTIC
 
     def __init__(self, coordinator: RevoxCoordinator) -> None:
-        super().__init__(coordinator)
-        self._attr_unique_id = f"{self._unique_base}_battery_charging"
+        super().__init__(coordinator, "battery_charging")
 
     @property
     def is_on(self) -> bool | None:
@@ -54,7 +55,7 @@ class RevoxBatteryChargingSensor(RevoxEntity, BinarySensorEntity):
         return st.battery_charging if st else None
 
 
-class RevoxPairedBatteryChargingSensor(RevoxEntity, BinarySensorEntity):
+class RevoxPairedBatteryChargingSensor(RevoxPartnerEntity, BinarySensorEntity):
     """Whether the paired client speaker's battery is charging."""
 
     _attr_translation_key = "paired_battery_charging"
@@ -62,21 +63,12 @@ class RevoxPairedBatteryChargingSensor(RevoxEntity, BinarySensorEntity):
     _attr_entity_category = EntityCategory.DIAGNOSTIC
 
     def __init__(self, coordinator: RevoxCoordinator) -> None:
-        super().__init__(coordinator)
-        self._attr_unique_id = f"{self._unique_base}_paired_battery_charging"
-
-    @property
-    def available(self) -> bool:
-        st = self.coordinator.data
-        return super().available and bool(st and st.paired)
+        super().__init__(coordinator, "paired_battery_charging")
 
     @property
     def is_on(self) -> bool | None:
-        st = self.coordinator.data
-        if st is None or not st.paired:
-            return None
-        _soc, charging = parse_battery(st.paired[0].get("battery"))
-        return charging
+        partner = self.partner
+        return parse_battery(partner.get("battery"))[1] if partner else None
 
 
 class RevoxKleernetPairedSensor(RevoxEntity, BinarySensorEntity):
@@ -93,8 +85,7 @@ class RevoxKleernetPairedSensor(RevoxEntity, BinarySensorEntity):
     _attr_entity_category = EntityCategory.DIAGNOSTIC
 
     def __init__(self, coordinator: RevoxCoordinator) -> None:
-        super().__init__(coordinator)
-        self._attr_unique_id = f"{self._unique_base}_kleernet_paired"
+        super().__init__(coordinator, "kleernet_paired")
 
     @property
     def is_on(self) -> bool | None:
@@ -102,7 +93,7 @@ class RevoxKleernetPairedSensor(RevoxEntity, BinarySensorEntity):
         return None if st is None else st.kleernet_paired
 
     @property
-    def extra_state_attributes(self) -> dict:
+    def extra_state_attributes(self) -> dict[str, Any]:
         st = self.coordinator.data
         if st is None:
             return {}

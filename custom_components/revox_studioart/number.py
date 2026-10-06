@@ -36,8 +36,7 @@ class RevoxMaxVolume(RevoxEntity, RestoreNumber):
     _attr_entity_category = EntityCategory.CONFIG
 
     def __init__(self, coordinator: RevoxCoordinator) -> None:
-        super().__init__(coordinator)
-        self._attr_unique_id = f"{self._unique_base}_maxvolume"
+        super().__init__(coordinator, "maxvolume")
         self._value: float = 100
 
     async def async_added_to_hass(self) -> None:
@@ -51,6 +50,8 @@ class RevoxMaxVolume(RevoxEntity, RestoreNumber):
         return self._value
 
     async def async_set_native_value(self, value: float) -> None:
-        await self.coordinator.client.set_max_volume(int(value))
+        await self.coordinator.async_command(
+            self.coordinator.client.set_max_volume(int(value))
+        )
         self._value = value
         self.async_write_ha_state()

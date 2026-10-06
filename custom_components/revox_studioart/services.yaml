@@ -3,9 +3,9 @@ send_command:
   fields:
     entry_id:
       required: true
-      example: "1a2b3c..."
       selector:
-        text:
+        config_entry:
+          integration: revox_studioart
     ascii:
       required: false
       example: "volume 40"
@@ -45,9 +45,9 @@ unpair_speaker:
   fields:
     entry_id:
       required: true
-      example: "1a2b3c..."
       selector:
-        text:
+        config_entry:
+          integration: revox_studioart
     serial:
       required: false
       example: "SAAD11958"

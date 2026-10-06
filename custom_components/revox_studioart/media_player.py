@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-import asyncio
 import time
+from datetime import datetime
 from typing import Any
 
 from homeassistant.components import media_source
@@ -16,17 +16,28 @@ from homeassistant.components.media_player import (
     MediaType,
     async_process_play_media_url,
 )
-from homeassistant.core import HomeAssistant
-from homeassistant.exceptions import HomeAssistantError
+from homeassistant.core import HomeAssistant, callback
+from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.util import dt as dt_util
 
+from .api import RevoxState
 from .const import SOURCE_COMMANDS, SOURCE_ID_TO_NAME, SOURCE_IDS
 from .coordinator import RevoxConfigEntry, RevoxCoordinator
 from .entity import RevoxEntity
 
 # commands are serialized by the client's own connection lock
 PARALLEL_UPDATES = 0
+
+# How long an optimistic play/pause state is shown before the device must have
+# confirmed it; streaming sources can take a few seconds to transition.
+PENDING_STATE_SECONDS = 6.0
+
+# Volume to restore on unmute when the pre-mute level is unknown.
+DEFAULT_UNMUTE_VOLUME = 20
+
+# Canonical play states (see RevoxState.play_state).
+_PLAY_STATES = {1: MediaPlayerState.PLAYING, 2: MediaPlayerState.PAUSED}
 
 # Everything selectable: numeric-id sources (app mechanism) plus the
 # documented ASCII sources. Names overlapping in both maps prefer the id.
@@ -63,8 +74,7 @@ class RevoxMediaPlayer(RevoxEntity, MediaPlayerEntity):
     _attr_source_list = SOURCE_LIST
 
     def __init__(self, coordinator: RevoxCoordinator) -> None:
-        super().__init__(coordinator)
-        self._attr_unique_id = f"{self._unique_base}_media_player"
+        super().__init__(coordinator, "media_player")
         self._last_source: str | None = None
         self._volume_before_mute: int | None = None
         # optimistic state shown after a play/pause command until the device
@@ -73,22 +83,29 @@ class RevoxMediaPlayer(RevoxEntity, MediaPlayerEntity):
         self._pending_state: MediaPlayerState | None = None
         self._pending_until = 0.0
 
-    @property
-    def state(self) -> MediaPlayerState:
+    def _actual_state(self) -> MediaPlayerState:
+        """The state as reported by the device, ignoring pending commands."""
         st = self.coordinator.data
         if st is None or not st.available:
             return MediaPlayerState.OFF
         # NB: the device's STBY flag is 1 even while actively playing, so it
-        # cannot be used for the power state. Play states (verified):
-        # 0 = stopped/idle, 1 = playing, 2 = paused.
-        actual = {1: MediaPlayerState.PLAYING, 2: MediaPlayerState.PAUSED}.get(
-            st.play_state or 0, MediaPlayerState.IDLE
-        )
-        if self._pending_state is not None:
-            if actual == self._pending_state or time.monotonic() >= self._pending_until:
-                return actual  # confirmed, or the device never followed
+        # cannot be used for the power state.
+        return _PLAY_STATES.get(st.play_state or 0, MediaPlayerState.IDLE)
+
+    @property
+    def state(self) -> MediaPlayerState:
+        actual = self._actual_state()
+        if self._pending_state is not None and time.monotonic() < self._pending_until:
             return self._pending_state
         return actual
+
+    @callback
+    def _handle_coordinator_update(self) -> None:
+        # Drop the optimistic state once the device confirms it, so a later
+        # change made elsewhere (e.g. pause in the app) shows immediately.
+        if self._pending_state == self._actual_state():
+            self._pending_state = None
+        super()._handle_coordinator_update()
 
     @property
     def volume_level(self) -> float | None:
@@ -113,58 +130,62 @@ class RevoxMediaPlayer(RevoxEntity, MediaPlayerEntity):
 
     # -- now-playing metadata (playback JSON + PlayView pushes) -------------
     @property
-    def media_content_type(self) -> MediaType | None:
+    def _track(self) -> RevoxState | None:
+        """The state, but only while a track is loaded.
+
+        Artist/album/cover pushes outlive the track they belong to, so every
+        metadata field is gated on a current title.
+        """
         st = self.coordinator.data
-        return MediaType.MUSIC if st and st.media_title else None
+        return st if st is not None and st.media_title else None
+
+    @property
+    def media_content_type(self) -> MediaType | None:
+        return MediaType.MUSIC if self._track else None
 
     @property
     def media_title(self) -> str | None:
-        st = self.coordinator.data
-        return st.media_title if st else None
+        return track.media_title if (track := self._track) else None
 
     @property
     def media_artist(self) -> str | None:
-        st = self.coordinator.data
-        return st.media_artist if st and st.media_title else None
+        return track.media_artist if (track := self._track) else None
 
     @property
     def media_album_name(self) -> str | None:
-        st = self.coordinator.data
-        return st.media_album if st and st.media_title else None
+        return track.media_album if (track := self._track) else None
 
     @property
     def media_image_url(self) -> str | None:
-        st = self.coordinator.data
-        return st.media_image_url if st and st.media_title else None
+        return track.media_image_url if (track := self._track) else None
 
     @property
     def media_duration(self) -> int | None:
-        st = self.coordinator.data
-        if st is None or not st.media_title or st.media_duration_ms is None:
+        track = self._track
+        if track is None or track.media_duration_ms is None:
             return None
-        return round(st.media_duration_ms / 1000)
+        return round(track.media_duration_ms / 1000)
 
     @property
     def media_position(self) -> int | None:
-        st = self.coordinator.data
+        track = self._track
         if (
-            st is None
-            or not st.media_title
-            or st.media_position_ms is None
+            track is None
+            or track.media_position_ms is None
             or self.state not in (MediaPlayerState.PLAYING, MediaPlayerState.PAUSED)
         ):
             return None
-        return round(st.media_position_ms / 1000)
+        return round(track.media_position_ms / 1000)
 
     @property
-    def media_position_updated_at(self):
+    def media_position_updated_at(self) -> datetime | None:
         st = self.coordinator.data
         if st is None or st.media_position_ts is None or self.media_position is None:
             return None
         return dt_util.utc_from_timestamp(st.media_position_ts)
 
     @property
-    def extra_state_attributes(self) -> dict:
+    def extra_state_attributes(self) -> dict[str, Any]:
         st = self.coordinator.data
         if st is None:
             return {}
@@ -203,24 +224,24 @@ class RevoxMediaPlayer(RevoxEntity, MediaPlayerEntity):
                 self._volume_before_mute = st.volume
             await self.coordinator.async_command(self.coordinator.client.set_volume(0))
         else:
-            restore = self._volume_before_mute or 20
+            restore = self._volume_before_mute or DEFAULT_UNMUTE_VOLUME
             await self.coordinator.async_command(
                 self.coordinator.client.set_volume(restore)
             )
 
     async def async_select_source(self, source: str) -> None:
-        self._last_source = source
+        client = self.coordinator.client
         if source in SOURCE_IDS:
             # numeric id, exactly like the app's Source tab
-            await self.coordinator.async_command(
-                self.coordinator.client.select_source_id(SOURCE_IDS[source])
+            command = client.select_source_id(SOURCE_IDS[source])
+        elif source in SOURCE_COMMANDS:
+            command = client.select_source(SOURCE_COMMANDS[source])
+        else:
+            raise ServiceValidationError(
+                f"Unknown source {source!r}; choose one of {', '.join(SOURCE_LIST)}"
             )
-            return
-        cmd = SOURCE_COMMANDS.get(source)
-        if cmd:
-            await self.coordinator.async_command(
-                self.coordinator.client.select_source(cmd)
-            )
+        await self.coordinator.async_command(command)
+        self._last_source = source
 
     async def _play_pause(self, playing: bool) -> None:
         """Send play/pause and show the target state until confirmed.
@@ -229,16 +250,21 @@ class RevoxMediaPlayer(RevoxEntity, MediaPlayerEntity):
         pushes usually confirm within a second or two) or the deadline
         passes, so an early poll cannot flip the UI back and forth.
         """
+        client = self.coordinator.client
         self._pending_state = (
             MediaPlayerState.PLAYING if playing else MediaPlayerState.PAUSED
         )
-        self._pending_until = time.monotonic() + 6.0
+        self._pending_until = time.monotonic() + PENDING_STATE_SECONDS
         self.async_write_ha_state()
-        client = self.coordinator.client
-        await (client.play() if playing else client.pause())
-        # confirming poll; further confirmation arrives via pushes
-        await asyncio.sleep(1.0)
-        await self.coordinator.async_refresh()
+        try:
+            # one extra poll shortly after, in case no push confirms it
+            await self.coordinator.async_command(
+                client.play() if playing else client.pause(), settle=1.5
+            )
+        except HomeAssistantError:
+            self._pending_state = None
+            self.async_write_ha_state()
+            raise
 
     async def async_media_play(self) -> None:
         await self._play_pause(True)

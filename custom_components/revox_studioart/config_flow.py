@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-import logging
 from typing import Any
 
+import homeassistant.helpers.config_validation as cv
 import voluptuous as vol
 from homeassistant.config_entries import ConfigFlow, ConfigFlowResult
 from homeassistant.const import CONF_HOST, CONF_PORT
@@ -13,7 +13,14 @@ from homeassistant.helpers.service_info.zeroconf import ZeroconfServiceInfo
 from .api import RevoxError, RevoxState, RevoxStudioArtClient
 from .const import DEFAULT_PORT, DOMAIN
 
-_LOGGER = logging.getLogger(__name__)
+
+def _host_schema(host: str | None = None, port: int = DEFAULT_PORT) -> vol.Schema:
+    return vol.Schema(
+        {
+            vol.Required(CONF_HOST, default=host or vol.UNDEFINED): str,
+            vol.Optional(CONF_PORT, default=port): cv.port,
+        }
+    )
 
 
 class RevoxConfigFlow(ConfigFlow, domain=DOMAIN):
@@ -50,13 +57,40 @@ class RevoxConfigFlow(ConfigFlow, domain=DOMAIN):
                     data={CONF_HOST: host, CONF_PORT: port},
                 )
 
-        schema = vol.Schema(
-            {
-                vol.Required(CONF_HOST): str,
-                vol.Optional(CONF_PORT, default=DEFAULT_PORT): int,
-            }
+        return self.async_show_form(
+            step_id="user", data_schema=_host_schema(), errors=errors
         )
-        return self.async_show_form(step_id="user", data_schema=schema, errors=errors)
+
+    async def async_step_reconfigure(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Point an existing entry at a new address (e.g. after an IP change)."""
+        entry = self._get_reconfigure_entry()
+        errors: dict[str, str] = {}
+        if user_input is not None:
+            host = user_input[CONF_HOST]
+            port = user_input.get(CONF_PORT, DEFAULT_PORT)
+            try:
+                state = await self._validate(host, port)
+            except RevoxError:
+                errors["base"] = "cannot_connect"
+            else:
+                # refuse to silently swap in a different speaker; entries from
+                # before serial-based ids carry the host and are not checked
+                if state.serial and entry.unique_id != entry.data[CONF_HOST]:
+                    await self.async_set_unique_id(state.serial)
+                    self._abort_if_unique_id_mismatch(reason="wrong_device")
+                return self.async_update_reload_and_abort(
+                    entry, data_updates={CONF_HOST: host, CONF_PORT: port}
+                )
+
+        return self.async_show_form(
+            step_id="reconfigure",
+            data_schema=_host_schema(
+                entry.data[CONF_HOST], entry.data.get(CONF_PORT, DEFAULT_PORT)
+            ),
+            errors=errors,
+        )
 
     async def async_step_zeroconf(
         self, discovery_info: ZeroconfServiceInfo

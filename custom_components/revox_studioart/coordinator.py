@@ -11,6 +11,7 @@ from typing import Any
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_HOST
 from homeassistant.core import HomeAssistant, callback
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.debounce import Debouncer
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
@@ -42,14 +43,20 @@ class RevoxCoordinator(DataUpdateCoordinator[RevoxState]):
             ),
         )
         self.client = client
+        # entities are created after the first successful refresh, so the
+        # serial is normally known by then; the host is the legacy fallback
+        self.unique_base: str = entry.data[CONF_HOST]
         self._burst_task: asyncio.Task | None = None
         self._settle_task: asyncio.Task | None = None
 
     async def _async_update_data(self) -> RevoxState:
         try:
-            return await self.client.async_get_state()
+            state = await self.client.async_get_state()
         except RevoxError as err:
             raise UpdateFailed(str(err)) from err
+        if self.data is None and state.serial:
+            self.unique_base = state.serial
+        return state
 
     async def async_command(
         self, coro: Coroutine[Any, Any, Any], *, settle: float = 0.0
@@ -60,15 +67,29 @@ class RevoxCoordinator(DataUpdateCoordinator[RevoxState]):
         commands the speaker applies asynchronously — unpairing takes about
         four seconds to show up in ``paired[]``. It is scheduled rather than
         awaited so the caller (a button press, a service call) returns at once.
+
+        Communication failures surface as ``HomeAssistantError`` so the UI
+        shows a readable message instead of an unhandled exception.
         """
-        await coro
+        try:
+            await coro
+        except RevoxError as err:
+            raise HomeAssistantError(
+                f"Command to {self.client.host} failed: {err}"
+            ) from err
         await self.async_request_refresh()
         if settle > 0:
             if self._settle_task is not None:
                 self._settle_task.cancel()
-            self._settle_task = self.config_entry.async_create_background_task(
-                self.hass, self._async_settle_refresh(settle), "revox settle refresh"
+            self._settle_task = self._background(
+                self._async_settle_refresh(settle), "settle refresh"
             )
+
+    def _background(self, coro: Coroutine[Any, Any, None], name: str) -> asyncio.Task:
+        """Run ``coro`` as a task that is cancelled when the entry unloads."""
+        return self.config_entry.async_create_background_task(
+            self.hass, coro, f"{self.name} {name}"
+        )
 
     async def _async_settle_refresh(self, delay: float) -> None:
         await asyncio.sleep(delay)
@@ -102,12 +123,12 @@ class RevoxCoordinator(DataUpdateCoordinator[RevoxState]):
             # a decoded push carries only part of the picture (e.g. the
             # source id but not the play state) — always confirm with a
             # debounced poll shortly after
-            self.hass.async_create_task(self.async_request_refresh())
+            self._background(self.async_request_refresh(), "push refresh")
             # ...and again a little later: on stream start the playback
             # JSON flips to "playing" only ~2-3 s after the push markers
             if self._burst_task is None or self._burst_task.done():
-                self._burst_task = self.hass.async_create_task(
-                    self._async_burst_refresh()
+                self._burst_task = self._background(
+                    self._async_burst_refresh(), "burst refresh"
                 )
 
     async def _async_burst_refresh(self) -> None:

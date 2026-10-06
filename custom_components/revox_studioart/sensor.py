@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
+from typing import Any
 
 from homeassistant.components.sensor import (
     RestoreSensor,
@@ -13,20 +14,21 @@ from homeassistant.components.sensor import (
     SensorStateClass,
 )
 from homeassistant.const import PERCENTAGE, EntityCategory
-from homeassistant.core import HomeAssistant
+from homeassistant.core import HomeAssistant, callback
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.icon import icon_for_battery_level
+from homeassistant.helpers.typing import StateType
 
 from .api import RevoxState, parse_battery
 from .coordinator import RevoxConfigEntry, RevoxCoordinator
-from .entity import RevoxEntity
+from .entity import RevoxEntity, RevoxPartnerEntity
 
 PARALLEL_UPDATES = 0
 
 
 @dataclass(frozen=True, kw_only=True)
 class RevoxSensorDescription(SensorEntityDescription):
-    value: Callable[[RevoxState], object]
+    value: Callable[[RevoxState], StateType]
 
 
 # Wi-Fi quality code as shown by the app's "Signal Quality" field
@@ -98,16 +100,13 @@ class RevoxSensor(RevoxEntity, SensorEntity):
     def __init__(
         self, coordinator: RevoxCoordinator, desc: RevoxSensorDescription
     ) -> None:
-        super().__init__(coordinator)
+        super().__init__(coordinator, desc.key)
         self.entity_description = desc
-        self._attr_unique_id = f"{self._unique_base}_{desc.key}"
 
     @property
-    def native_value(self):
+    def native_value(self) -> StateType:
         st = self.coordinator.data
-        if st is None:
-            return None
-        return self.entity_description.value(st)
+        return None if st is None else self.entity_description.value(st)
 
 
 class RevoxBatteryBase(RevoxEntity, RestoreSensor):
@@ -124,8 +123,8 @@ class RevoxBatteryBase(RevoxEntity, RestoreSensor):
     _attr_state_class = SensorStateClass.MEASUREMENT
     _attr_entity_category = EntityCategory.DIAGNOSTIC
 
-    def __init__(self, coordinator: RevoxCoordinator) -> None:
-        super().__init__(coordinator)
+    def __init__(self, coordinator: RevoxCoordinator, key: str) -> None:
+        super().__init__(coordinator, key)
         self._last_soc: int | None = None
 
     async def async_added_to_hass(self) -> None:
@@ -134,38 +133,32 @@ class RevoxBatteryBase(RevoxEntity, RestoreSensor):
         # older versions could have stored a textual state — numbers only
         if data is not None and isinstance(data.native_value, (int, float)):
             self._last_soc = round(data.native_value)
+        self._update_from_data()
 
-    @property
-    def _battery(self) -> tuple[int | None, bool | None]:
-        """Return the current (SoC, charging) reading."""
+    def _reading(self, st: RevoxState) -> tuple[int | None, bool | None]:
+        """Return the (SoC, charging) reading this sensor reports."""
         raise NotImplementedError
 
-    @property
-    def native_value(self) -> int | None:
-        soc, charging = self._battery
+    @callback
+    def _handle_coordinator_update(self) -> None:
+        self._update_from_data()
+        super()._handle_coordinator_update()
+
+    def _update_from_data(self) -> None:
+        st = self.coordinator.data
+        soc, charging = (None, None) if st is None else self._reading(st)
         if soc is not None:
             self._last_soc = soc
-            return soc
-        if charging:
-            return self._last_soc  # level from before charging started
-        return None
-
-    @property
-    def icon(self) -> str:
-        soc, charging = self._battery
-        return icon_for_battery_level(
+        # while charging no SoC is reported: hold the level from before
+        held = charging and soc is None and self._last_soc is not None
+        self._attr_native_value = self._last_soc if held else soc
+        self._attr_icon = icon_for_battery_level(
             soc if soc is not None else self._last_soc, bool(charging)
         )
-
-    @property
-    def extra_state_attributes(self) -> dict:
-        soc, charging = self._battery
-        return {
+        self._attr_extra_state_attributes = {
             "charging": charging,
             # flags that the shown value is held from before charging began
-            "soc_is_last_known": bool(charging)
-            and soc is None
-            and self._last_soc is not None,
+            "soc_is_last_known": held,
         }
 
 
@@ -175,82 +168,51 @@ class RevoxBatterySensor(RevoxBatteryBase):
     _attr_translation_key = "battery"
 
     def __init__(self, coordinator: RevoxCoordinator) -> None:
-        super().__init__(coordinator)
-        self._attr_unique_id = f"{self._unique_base}_battery"
+        super().__init__(coordinator, "battery")
 
-    @property
-    def _battery(self) -> tuple[int | None, bool | None]:
-        st = self.coordinator.data
-        if st is None:
-            return None, None
+    def _reading(self, st: RevoxState) -> tuple[int | None, bool | None]:
         return st.battery, st.battery_charging
 
 
-class RevoxPairedBase(RevoxEntity, SensorEntity):
-    """Base for sensors describing the paired Kleernet client speaker."""
-
-    _attr_entity_category = EntityCategory.DIAGNOSTIC
-
-    @property
-    def _paired(self) -> dict | None:
-        st = self.coordinator.data
-        if st is None or not st.paired:
-            return None
-        return st.paired[0]
-
-    @property
-    def available(self) -> bool:
-        return super().available and self._paired is not None
-
-
-class RevoxPairedSpeakerSensor(RevoxPairedBase):
+class RevoxPairedSpeakerSensor(RevoxPartnerEntity, SensorEntity):
     """Name and details of the paired client speaker (e.g. the stereo partner)."""
 
     _attr_translation_key = "paired_speaker"
+    _attr_entity_category = EntityCategory.DIAGNOSTIC
 
     def __init__(self, coordinator: RevoxCoordinator) -> None:
-        super().__init__(coordinator)
-        self._attr_unique_id = f"{self._unique_base}_paired_speaker"
+        super().__init__(coordinator, "paired_speaker")
 
     @property
     def native_value(self) -> str | None:
-        paired = self._paired
-        return paired.get("name") if paired else None
+        partner = self.partner
+        return partner.get("name") if partner else None
 
     @property
-    def extra_state_attributes(self) -> dict:
-        paired = self._paired
-        if not paired:
+    def extra_state_attributes(self) -> dict[str, Any]:
+        partner = self.partner
+        if not partner:
             return {}
-        st = self.coordinator.data
+        paired = self.coordinator.data.paired
         return {
-            "serial": paired.get("ID"),
-            "type": paired.get("type"),
-            "volume": paired.get("volume"),
-            "channel": paired.get("channel"),
-            "paired_count": len(st.paired) if st else None,
-            "all_paired": [p.get("name") for p in (st.paired if st else [])],
+            "serial": partner.get("ID"),
+            "type": partner.get("type"),
+            "volume": partner.get("volume"),
+            "channel": partner.get("channel"),
+            "paired_count": len(paired),
+            "all_paired": [p.get("name") for p in paired],
         }
 
 
-class RevoxPairedBatterySensor(RevoxBatteryBase):
+class RevoxPairedBatterySensor(RevoxPartnerEntity, RevoxBatteryBase):
     """Battery SoC of the paired client speaker (see RevoxBatteryBase)."""
 
     _attr_translation_key = "paired_speaker_battery"
 
     def __init__(self, coordinator: RevoxCoordinator) -> None:
-        super().__init__(coordinator)
-        self._attr_unique_id = f"{self._unique_base}_paired_battery"
+        super().__init__(coordinator, "paired_battery")
 
-    @property
-    def available(self) -> bool:
-        st = self.coordinator.data
-        return super().available and bool(st and st.paired)
-
-    @property
-    def _battery(self) -> tuple[int | None, bool | None]:
-        st = self.coordinator.data
-        if st is None or not st.paired:
-            return None, None
+    def _reading(self, st: RevoxState) -> tuple[int | None, bool | None]:
         # same encoding as the chief: 254 = charging (SoC unknown), 255 = full
-        return parse_battery(st.paired[0].get("battery"))
+        partner = st.primary_partner
+        return parse_battery(partner.get("battery") if partner else None)

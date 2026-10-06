@@ -181,11 +181,16 @@ def test_mirror_aux_trigger_is_inverted(api):
     assert partial["dis_auto_aux"] is True
 
 
-def test_mirror_get_frames_only_flag_activity(api):
+def test_mirror_get_frames_are_ignored(api):
+    """The mirror echoes every client's gets — our own polls included.
+
+    Flagging them as activity made each poll schedule the next one, so the
+    integration polled every ~2 s instead of every 10 s (seen in every
+    capture: each poll's gets come back on the 7777 subscription).
+    """
     client = _client(api)
-    # a mirrored *get* carries no data byte and must not change state
-    get_frame = api._build_frame(2, 0x34)
-    assert client._parse_event(0x70, get_frame) == {"_activity": True}
+    for group, cmd in ((2, 0x37), (2, 0x3C), (3, 0x03), (3, 0x56), (2, 0x8D)):
+        assert client._parse_event(0x70, api._build_frame(group, cmd)) == {}
 
 
 def test_dispatch_event_syncs_toggle_cache(api):
@@ -416,3 +421,101 @@ def test_kleernet_partner_is_none_when_ambiguous(api):
 def test_kleernet_pairing_checks_every_partner(api):
     st = api.RevoxState(paired=[_paired(channel=1), _paired(ID="SB", channel=0)])
     assert st.kleernet_pairing is True
+
+
+# -- reply matching on the shared control port -------------------------------
+
+
+class _NullWriter:
+    def write(self, data):
+        pass
+
+    async def drain(self):
+        pass
+
+
+def test_request_skips_other_clients_replies(api):
+    """Replies are fanned out to every connection, so a busy app can put any
+    number of foreign frames ahead of ours — and a group-2 frame with the
+    right cmd number must not be mistaken for a group-3 reply."""
+
+    async def run():
+        reader = asyncio.StreamReader()
+        for _ in range(20):
+            reader.feed_data(api._build_frame(2, 0x3D, b'{"state":1}'))
+        reader.feed_data(api._build_frame(2, 0x04, b"wrong group"))
+        reader.feed_data(api._build_frame(3, 0x04, b'{"paired":[]}'))
+        return await _client(api)._request(reader, _NullWriter(), 3, 0x03, 0x04)
+
+    assert json.loads(asyncio.run(run())) == {"paired": []}
+
+
+def test_request_times_out_as_revox_error(api, monkeypatch):
+    monkeypatch.setattr(api, "_REPLY_TIMEOUT", 0.05)
+
+    async def run():
+        reader = asyncio.StreamReader()
+        reader.feed_data(api._build_frame(2, 0x3D, b"{}"))  # never our reply
+        await _client(api)._request(reader, _NullWriter(), 2, 0x37, 0x38)
+
+    try:
+        asyncio.run(run())
+    except api.RevoxError as err:
+        assert "0x38" in str(err)
+    else:
+        raise AssertionError("expected RevoxError")
+
+
+def test_mirror_table_covers_every_single_byte_setting(api):
+    client = _client(api)
+    cases = {
+        api.SET_SOURCE: ("source", 25, 25),
+        api.SET_LOUDNESS: ("loudness", 1, True),
+        api.SET_AUX_HIGH_SENS: ("aux_high_sensitivity", 0, False),
+        api.SET_AUTO_POWER_ON: ("auto_power_on", 1, True),
+        api.SET_LR_SWAP: ("lr_reverse", 1, True),
+        api.SET_POWER_ON_SOURCE: ("power_on_source", 7, 7),
+        api.SET_KLEERNET_BAND: ("kleernet_band", 3, 3),
+    }
+    for (group, cmd), (field, raw, expected) in cases.items():
+        frame = api._build_frame(group, cmd, bytes([raw]))
+        assert client._parse_event(0x70, frame) == {
+            field: expected,
+            "_activity": True,
+        }
+
+
+def test_primary_partner_is_first_entry_even_without_serial(api):
+    assert api.RevoxState().primary_partner is None
+    st = api.RevoxState(paired=[_paired(ID="", name="ghost"), _paired()])
+    assert st.primary_partner["name"] == "ghost"
+
+
+# -- findings from re-analysing the packet captures (2026-10-06) -------------
+
+
+def test_channel_status_is_activity_only_when_it_changes(api):
+    """0x67 follows every group 3 / 0x03 get within ~0.1 s (161/161 times in
+    the captures), so an unchanged repeat must not trigger a refresh."""
+    client = _client(api)
+    payload = b"FREE,STEREO,RevoxA10028C65AHN"
+    client._dispatch_event(0x67, 0, payload)  # first sighting: new information
+    repeat = client._parse_event(0x67, payload)
+    assert repeat == {"ddms_state": "FREE", "channel": "STEREO"}
+    changed = client._parse_event(0x67, b"FREE,LEFT,RevoxA10028C65AHN")
+    assert changed["_activity"] is True
+    assert changed["channel"] == "LEFT"
+
+
+def test_transient_source_zero_push_is_ignored(api):
+    """op 0x32 "0" precedes the real id on a source switch / AirPlay start;
+    the playback JSON never reports source 0."""
+    client = _client(api)
+    assert client._parse_event(0x32, b"0") == {}
+    assert client._parse_event(0x0A, b"0") == {}
+    assert client._parse_event(0x32, b"1") == {"source": 1, "_activity": True}
+
+
+def test_merge_state_unchanged_values_return_same_object(api):
+    st = api.RevoxState(volume=10, channel="STEREO")
+    assert api.merge_state(st, {"volume": 10, "channel": "STEREO"}) is st
