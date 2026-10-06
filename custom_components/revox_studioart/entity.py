@@ -1,9 +1,11 @@
-"""Shared base entity for Revox STUDIOART."""
+"""Shared base entities for Revox STUDIOART."""
 
 from __future__ import annotations
 
+from typing import Any
+
 from homeassistant.const import CONF_HOST
-from homeassistant.helpers.device_registry import DeviceInfo
+from homeassistant.helpers.device_registry import CONNECTION_NETWORK_MAC, DeviceInfo
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import DEFAULT_NAME, DOMAIN, MANUFACTURER
@@ -11,38 +13,52 @@ from .coordinator import RevoxCoordinator
 
 
 class RevoxEntity(CoordinatorEntity[RevoxCoordinator]):
-    """Base class wiring device info from the coordinator's state."""
+    """Base class wiring unique id and device info from the coordinator."""
 
     _attr_has_entity_name = True
 
-    def __init__(self, coordinator: RevoxCoordinator) -> None:
+    def __init__(self, coordinator: RevoxCoordinator, key: str) -> None:
         super().__init__(coordinator)
-        self._host: str = coordinator.config_entry.data[CONF_HOST]
-        # entities are created after the first successful refresh, so the
-        # serial is normally known; the host is the legacy fallback
-        st = coordinator.data
-        self._unique_base: str = (st.serial if st and st.serial else None) or self._host
+        self._attr_unique_id = f"{coordinator.unique_base}_{key}"
+        self._attr_device_info = _device_info(coordinator)
+
+
+class RevoxPartnerEntity(RevoxEntity):
+    """Base for entities describing the paired Kleernet client speaker.
+
+    Unavailable while no partner is bound, rather than showing "unknown".
+    """
 
     @property
-    def device_info(self) -> DeviceInfo:
+    def partner(self) -> dict[str, Any] | None:
         st = self.coordinator.data
-        connections = set()
-        if st and st.mac:
-            connections.add(("mac", st.mac.lower()))
-        # one unified firmware string ("V3957 / Controller V44"); the parts
-        # are the LS9 main firmware and the controller version from the
-        # device status JSON.
-        sw_version = None
-        if st and st.firmware_ls9:
-            sw_version = st.firmware_ls9
-            if st.firmware_controller:
-                sw_version = f"{st.firmware_ls9} / Controller {st.firmware_controller}"
-        return DeviceInfo(
-            identifiers={(DOMAIN, self._unique_base)},
-            connections=connections,
-            manufacturer=MANUFACTURER,
-            model="STUDIOART A100",
-            name=(st.name if st and st.name else None) or DEFAULT_NAME,
-            sw_version=sw_version,
-            configuration_url=f"http://{self._host}",
-        )
+        return st.primary_partner if st else None
+
+    @property
+    def available(self) -> bool:
+        return super().available and self.partner is not None
+
+
+def _device_info(coordinator: RevoxCoordinator) -> DeviceInfo:
+    host = coordinator.config_entry.data[CONF_HOST]
+    st = coordinator.data
+    connections = set()
+    if st and st.mac:
+        connections.add((CONNECTION_NETWORK_MAC, st.mac.lower()))
+    # one unified firmware string ("V3957 / Controller V44"); the parts are
+    # the LS9 main firmware and the controller version from the device status
+    sw_version = None
+    if st and st.firmware_ls9:
+        sw_version = st.firmware_ls9
+        if st.firmware_controller:
+            sw_version = f"{st.firmware_ls9} / Controller {st.firmware_controller}"
+    return DeviceInfo(
+        identifiers={(DOMAIN, coordinator.unique_base)},
+        connections=connections,
+        manufacturer=MANUFACTURER,
+        model="STUDIOART A100",
+        name=(st.name if st else None) or DEFAULT_NAME,
+        serial_number=st.serial if st else None,
+        sw_version=sw_version,
+        configuration_url=f"http://{host}",
+    )

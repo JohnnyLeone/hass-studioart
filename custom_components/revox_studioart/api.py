@@ -100,6 +100,10 @@ _LOGGER = logging.getLogger(__name__)
 CONTROL_PORT = 50007
 EVENT_PORT = 7777
 
+# How long to wait for a connection or for the reply to one binary get.
+_CONNECT_TIMEOUT = 4.0
+_REPLY_TIMEOUT = 4.0
+
 # Binary read commands (group, request_cmd, expected_reply_cmd)
 _CMD_DEVICE_STATUS = (2, 0x37, 0x38)
 _CMD_PLAYBACK = (2, 0x3C, 0x3D)
@@ -191,6 +195,35 @@ _EV_DDMS = 0x64
 _EV_STEREOPAIR_MODE = 0x6C
 CHANNEL_UNPAIR = "SETFREE"  # release the speaker from any pair/group (via 0x64)
 
+# Mirrored binary sets (event op 0x70) that map 1:1 onto a state field. The set
+# frame's single value byte is passed through the converter. Multi-byte sets
+# (the unpair serial) and the inverted aux trigger are handled separately.
+_MIRRORED_SETS: dict[tuple[int, int], tuple[str, Callable[[int], Any]]] = {
+    SET_SOURCE: ("source", int),
+    SET_VOLUME: ("volume", int),
+    SET_LOUDNESS: ("loudness", bool),
+    SET_AUX_HIGH_SENS: ("aux_high_sensitivity", bool),
+    SET_AUTO_POWER_ON: ("auto_power_on", bool),
+    SET_LR_SWAP: ("lr_reverse", bool),
+    SET_POWER_ON_SOURCE: ("power_on_source", int),
+    SET_KLEERNET_BAND: ("kleernet_band", int),
+}
+
+# Fields that only ever arrive as pushes. They are cached in the client and
+# carried into every polled state, which would otherwise reset them to None
+# and make the entities flicker to "unknown" on each scan.
+_PUSH_ONLY_FIELDS = (
+    "channel",
+    "ddms_state",
+    "media_artist",
+    "media_album",
+    "media_duration_ms",
+)
+
+# Toggles whose gets are throttled (see _TOGGLE_POLL_INTERVAL); pushes and our
+# own sets keep the cached value current in between.
+_TOGGLE_FIELDS = ("loudness", "aux_high_sensitivity")
+
 
 class RevoxError(Exception):
     """Raised when communication with the speaker fails."""
@@ -265,6 +298,15 @@ class RevoxState:
     # channel 0 while a pairing completes). Event 0x67 is DDMS and does not.
 
     @property
+    def primary_partner(self) -> dict[str, Any] | None:
+        """The first paired[] entry, for display (name, battery, volume).
+
+        Unlike :attr:`kleernet_partner` this does not require a serial or an
+        unambiguous single partner — it is what the app shows as "the" client.
+        """
+        return self.paired[0] if self.paired else None
+
+    @property
     def kleernet_partners(self) -> list[dict[str, Any]]:
         """Bound partners that carry a serial — the payload unpairing needs.
 
@@ -331,6 +373,16 @@ def _as_bool(value: Any) -> bool | None:
     return bool(value)
 
 
+def _push_play_state(value: Any) -> int | None:
+    """Map the push play-state enum onto the canonical one.
+
+    Pushes (op 0x33 and PlayView "PlayState") use 0 = playing/active and
+    2 = paused, unlike the playback JSON (0 = stopped, 1 = playing). Other
+    values carry no usable state.
+    """
+    return {0: 1, 2: 2}.get(value)
+
+
 def parse_battery(raw: int | None) -> tuple[int | None, bool | None]:
     """Decode the battery byte into (SoC percent, charging).
 
@@ -392,7 +444,7 @@ class RevoxStudioArtClient:
         port = port or self._port
         try:
             return await asyncio.wait_for(
-                asyncio.open_connection(self._host, port), timeout=4.0
+                asyncio.open_connection(self._host, port), timeout=_CONNECT_TIMEOUT
             )
         except (TimeoutError, OSError) as err:
             raise RevoxError(f"cannot connect to {self._host}:{port}: {err}") from err
@@ -425,12 +477,17 @@ class RevoxStudioArtClient:
         """Send a binary get and return the raw reply payload."""
         writer.write(_build_frame(group, req_cmd))
         await writer.drain()
-        # skip up to a few unrelated frames until we see the reply we want
-        for _ in range(6):
-            _g, c, payload = await self._read_frame(reader)
-            if c == reply_cmd:
-                return payload
-        raise RevoxError(f"no reply 0x{reply_cmd:02x} for 0x{req_cmd:02x}")
+        # Replies to other clients (the app polling in parallel) are fanned
+        # out to us too, so skip unrelated frames until the deadline rather
+        # than giving up after a fixed number of them.
+        try:
+            async with asyncio.timeout(_REPLY_TIMEOUT):
+                while True:
+                    g, c, payload = await self._read_frame(reader)
+                    if (g, c) == (group, reply_cmd):
+                        return payload
+        except TimeoutError as err:
+            raise RevoxError(f"no reply 0x{reply_cmd:02x} for 0x{req_cmd:02x}") from err
 
     async def _request_json(
         self,
@@ -506,7 +563,13 @@ class RevoxStudioArtClient:
     ) -> RevoxState:
         """Build a state snapshot from the polled JSON documents."""
         st = RevoxState(
-            raw={"device": dev, "playback": play, "multiroom": multi, "kleernet": kleer}
+            raw={
+                "device": dev,
+                "playback": play,
+                "multiroom": multi,
+                "kleernet": kleer,
+                "standby_timer": timer,
+            }
         )
         st.name = dev.get("Name")
         st.ip = dev.get("IP")
@@ -543,11 +606,8 @@ class RevoxStudioArtClient:
     def _overlay_pushed_values(self, st: RevoxState) -> None:
         """Fold push-only values and fresh push overrides into ``st``."""
         # values that only arrive via pushes — carry them over polls
-        st.channel = self._push_cache.get("channel")
-        st.ddms_state = self._push_cache.get("ddms_state")
-        st.media_artist = self._push_cache.get("media_artist")
-        st.media_album = self._push_cache.get("media_album")
-        st.media_duration_ms = self._push_cache.get("media_duration_ms")
+        for key in _PUSH_ONLY_FIELDS:
+            setattr(st, key, self._push_cache.get(key))
         if self._media_position is not None:
             st.media_position_ms, st.media_position_ts = self._media_position
         # A fresh volume push outranks the (trailing) JSON; each push renews
@@ -736,9 +796,10 @@ class RevoxStudioArtClient:
 
         This is *not* how pairing happens — see :meth:`kleernet_pair_mode`.
         """
-        payload = serial.strip().upper().encode("ascii")
-        if not payload:
-            raise RevoxError("serial number must not be empty")
+        serial = serial.strip().upper()
+        if not serial or not serial.isascii():
+            raise RevoxError(f"invalid serial number: {serial!r}")
+        payload = serial.encode("ascii")
         await self._oneshot(
             _build_frame(*SET_UNPAIR_SPEAKER, payload), read_ack_frame=True
         )
@@ -797,14 +858,12 @@ class RevoxStudioArtClient:
             if not expect_reply:
                 return None
 
-            async def _wait() -> str:
-                while True:
-                    rop, _st, rpl = await self._read_event_frame(reader)
-                    if rop == op:
-                        return rpl.decode("utf-8", "replace")
-
             try:
-                return await asyncio.wait_for(_wait(), timeout=4.0)
+                async with asyncio.timeout(_REPLY_TIMEOUT):
+                    while True:
+                        rop, _st, rpl = await self._read_event_frame(reader)
+                        if rop == op:
+                            return rpl.decode("utf-8", "replace")
             except (TimeoutError, _EventIdle):
                 return None
         finally:
@@ -844,24 +903,9 @@ class RevoxStudioArtClient:
 
         e.g. ``READ_fwdownload_xml`` -> ``fwdownload_xml:<url>``.
         """
-        reader, writer = await self._open(self._event_port)
-        try:
-            writer.write(_build_event_frame(_EV_HANDSHAKE))
-            writer.write(_build_event_frame(_EV_QUERY, text.encode("utf-8")))
-            await writer.drain()
-
-            async def _wait_for_reply() -> str:
-                while True:
-                    op, _status, payload = await self._read_event_frame(reader)
-                    if op == _EV_QUERY:
-                        return payload.decode("utf-8", "replace")
-
-            try:
-                return await asyncio.wait_for(_wait_for_reply(), timeout=4.0)
-            except (TimeoutError, _EventIdle):
-                return None
-        finally:
-            await self._close(writer)
+        return await self.async_send_event_op(
+            _EV_QUERY, text.encode("utf-8"), expect_reply=True
+        )
 
     @staticmethod
     async def _read_event_frame(
@@ -925,17 +969,11 @@ class RevoxStudioArtClient:
         if not partial:
             return
         # keep the throttled toggle cache in sync with mirrored sets
-        for key in ("loudness", "aux_high_sensitivity"):
+        for key in _TOGGLE_FIELDS:
             if key in partial:
                 self._toggle_cache[key] = partial[key]
         # remember push-only values so the next poll does not lose them
-        for key in (
-            "channel",
-            "ddms_state",
-            "media_artist",
-            "media_album",
-            "media_duration_ms",
-        ):
+        for key in _PUSH_ONLY_FIELDS:
             if key in partial:
                 self._push_cache[key] = partial[key]
         if "play_state" in partial:
@@ -949,24 +987,30 @@ class RevoxStudioArtClient:
         """Turn one push frame into a partial-state dict."""
         text = payload.decode("utf-8", "replace") if payload else ""
         if op == _EV_CHANNEL_STATUS and payload:
-            # "FREE,STEREO,RevoxA10028C65AHN"
+            # "FREE,STEREO,RevoxA10028C65AHN". NB: this is the DDMS (Wi-Fi
+            # multi-room) state, not Kleernet. The speaker sends it after
+            # *every* group 3 / 0x03 get (ours included), so it only counts
+            # as activity when something actually changed — otherwise each
+            # poll would trigger the next one.
             parts = text.split(",")
-            partial: dict[str, Any] = {"_activity": True}
-            if len(parts) >= 2:
-                # NB: this is the DDMS (Wi-Fi multi-room) state, not Kleernet.
-                partial["ddms_state"] = parts[0]
-                partial["channel"] = parts[1]
+            if len(parts) < 2:
+                return {}
+            partial: dict[str, Any] = {"ddms_state": parts[0], "channel": parts[1]}
+            if any(self._push_cache.get(k) != v for k, v in partial.items()):
+                partial["_activity"] = True
             return partial
         if op in (_EV_SOURCE_A, _EV_SOURCE_B) and text.isdigit():
+            # "0" is a transient "no source" sent at the start of a switch or
+            # an AirPlay session, before the real id; the playback JSON never
+            # reports it, so ignore it rather than blank the source.
+            if text == "0":
+                return {}
             return {"source": int(text), "_activity": True}
         if op == _EV_PLAY_STATE and text.isdigit():
-            # push enum: 0 = playing/active, 2 = paused (differs from JSON!)
-            value = int(text)
-            if value == 2:
-                return {"play_state": 2, "_activity": True}
-            if value == 0:
-                return {"play_state": 1, "_activity": True}
-            return {"_activity": True}
+            partial = {"_activity": True}
+            if (value := _push_play_state(int(text))) is not None:
+                partial["play_state"] = value
+            return partial
         if op in (_EV_PLAYVIEW_A, _EV_PLAYVIEW_B):
             return self._parse_playview(payload)
         if op == _EV_POSITION and text.isdigit():
@@ -1027,12 +1071,8 @@ class RevoxStudioArtClient:
         source = contents.get("Current Source")
         if isinstance(source, int):
             partial["source"] = source
-        # PlayState uses the push enum: 0 = playing, 2 = paused
-        play_state = contents.get("PlayState")
-        if play_state == 2:
-            partial["play_state"] = 2
-        elif play_state == 0:
-            partial["play_state"] = 1
+        if (play_state := _push_play_state(contents.get("PlayState"))) is not None:
+            partial["play_state"] = play_state
         return partial
 
     @staticmethod
@@ -1041,45 +1081,41 @@ class RevoxStudioArtClient:
 
         The mirror wraps commands from any client (the app, another HA
         instance), so this is how we learn about outside changes instantly.
-        Mirrored *get* frames carry no data and only flag activity.
+
+        Frames without data are gets (or fire-and-forget actions) and are
+        ignored: the mirror echoes every client's polls — including our own —
+        so treating them as activity would make each poll trigger the next.
         """
         if not data:
-            return {"_activity": True} if cmd else {}
-        value = data[0]
-        if (group, cmd) == SET_SOURCE:
-            return {"source": value, "_activity": True}
-        if (group, cmd) == SET_VOLUME:
-            return {"volume": value, "_activity": True}
-        if (group, cmd) == SET_DIS_AUTO_AUX:
+            return {}
+        key = (group, cmd)
+        if key == SET_DIS_AUTO_AUX:
+            # the wire command is "disable auto aux": 1 = trigger OFF
             return {
-                "aux_trigger": not value,
-                "dis_auto_aux": bool(value),
+                "aux_trigger": not data[0],
+                "dis_auto_aux": bool(data[0]),
                 "_activity": True,
             }
-        if (group, cmd) == SET_AUX_HIGH_SENS:
-            return {"aux_high_sensitivity": bool(value), "_activity": True}
-        if (group, cmd) == SET_LOUDNESS:
-            return {"loudness": bool(value), "_activity": True}
-        if (group, cmd) == SET_AUTO_POWER_ON:
-            return {"auto_power_on": bool(value), "_activity": True}
-        if (group, cmd) == SET_LR_SWAP:
-            return {"lr_reverse": bool(value), "_activity": True}
-        if (group, cmd) == SET_POWER_ON_SOURCE:
-            return {"power_on_source": value, "_activity": True}
-        if (group, cmd) == SET_KLEERNET_BAND:
-            return {"kleernet_band": value, "_activity": True}
-        if (group, cmd) == SET_UNPAIR_SPEAKER:
-            # Multi-byte ASCII serial, not a single-byte value: someone
-            # unpairing a partner. The speaker takes a few seconds to drop it,
-            # so just flag activity and let the coordinator re-poll the
-            # multi-room state (group 3 / 0x03) for the authoritative result.
-            return {"_activity": True}
+        if key in _MIRRORED_SETS and len(data) == 1:
+            field_name, convert = _MIRRORED_SETS[key]
+            return {field_name: convert(data[0]), "_activity": True}
+        # Anything else — including the unpair set, whose payload is a
+        # multi-byte ASCII serial: the speaker drops the partner a few seconds
+        # later, so just flag activity and let the coordinator re-poll.
         return {"_activity": True}
 
 
 def merge_state(state: RevoxState, partial: dict[str, Any]) -> RevoxState:
-    """Return a copy of ``state`` with the partial push update applied."""
-    fields = {k: v for k, v in partial.items() if not k.startswith("_")}
+    """Return a copy of ``state`` with the partial push update applied.
+
+    Returns ``state`` itself when the push changes nothing, so callers can
+    skip notifying listeners.
+    """
+    fields = {
+        k: v
+        for k, v in partial.items()
+        if not k.startswith("_") and getattr(state, k) != v
+    }
     if not fields:
         return state
     return replace(state, **fields)

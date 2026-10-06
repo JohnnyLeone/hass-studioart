@@ -9,6 +9,14 @@
           "port": "Control port"
         }
       },
+      "reconfigure": {
+        "title": "Revox STUDIOART",
+        "description": "Update the address of your STUDIOART speaker.",
+        "data": {
+          "host": "IP address",
+          "port": "Control port"
+        }
+      },
       "confirm": {
         "title": "Revox STUDIOART",
         "description": "Add the discovered speaker {name}?"
@@ -17,7 +25,9 @@
     "abort": {
       "already_configured": "This speaker is already configured.",
       "cannot_connect": "Could not connect to the speaker on the control port.",
-      "not_studioart": "This device is not a Revox STUDIOART speaker."
+      "not_studioart": "This device is not a Revox STUDIOART speaker.",
+      "reconfigure_successful": "The speaker address was updated.",
+      "wrong_device": "That address belongs to a different speaker."
     },
     "error": {
       "cannot_connect": "Could not connect to the speaker on the control port."
@@ -112,11 +122,11 @@
   "services": {
     "send_command": {
       "name": "Send raw command",
-      "description": "Sends a raw command to a STUDIOART speaker. Use this to experiment with controls that do not yet have a dedicated entity.",
+      "description": "Sends a raw command to a STUDIOART speaker. Use this to experiment with controls that do not yet have a dedicated entity. Give an ASCII command, a raw line, or all three binary fields.",
       "fields": {
         "entry_id": {
-          "name": "Config entry ID",
-          "description": "The config entry (device) to target."
+          "name": "Device",
+          "description": "The speaker to send the command to."
         },
         "ascii": {
           "name": "ASCII command",
@@ -146,7 +156,7 @@
       "fields": {
         "entry_id": {
           "name": "Device",
-          "description": "Config entry id of the speaker to act on."
+          "description": "The speaker to act on."
         },
         "serial": {
           "name": "Serial number",

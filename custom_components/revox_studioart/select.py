@@ -2,11 +2,16 @@
 
 from __future__ import annotations
 
-from homeassistant.components.select import SelectEntity
+from collections.abc import Awaitable, Callable
+from dataclasses import dataclass
+from typing import Any
+
+from homeassistant.components.select import SelectEntity, SelectEntityDescription
 from homeassistant.const import EntityCategory
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
+from .api import RevoxState, RevoxStudioArtClient
 from .const import (
     CHANNEL_COMMANDS,
     CHANNEL_OPTIONS,
@@ -19,9 +24,40 @@ from .entity import RevoxEntity
 
 PARALLEL_UPDATES = 0
 
-# reverse lookups: option label -> wire value
-_POWER_ON_SOURCE_TO_ID = {label: idx for idx, label in POWER_ON_SOURCE_OPTIONS.items()}
-_KLEERNET_BAND_TO_ID = {label: band for band, label in KLEERNET_BAND_OPTIONS.items()}
+
+@dataclass(frozen=True, kw_only=True)
+class RevoxSelectDescription(SelectEntityDescription):
+    """A select backed by a numeric device setting."""
+
+    labels: dict[int, str]  # wire value -> option label
+    value: Callable[[RevoxState], int | None]
+    set_fn: Callable[[RevoxStudioArtClient, int], Awaitable[None]]
+
+
+SELECTS: tuple[RevoxSelectDescription, ...] = (
+    # Default source after manual power on (device field "PowerOnSrc").
+    # Set = group 2 / 0x58 (ack {"PowerOnSrc":n}); every index was confirmed
+    # on the wire by cycling the app's menu.
+    RevoxSelectDescription(
+        key="poweronsrc",
+        translation_key="power_on_source",
+        entity_category=EntityCategory.CONFIG,
+        labels=POWER_ON_SOURCE_OPTIONS,
+        value=lambda st: st.power_on_source,
+        set_fn=lambda client, idx: client.set_power_on_source(idx),
+    ),
+    # Kleernet wireless band between chief and client speakers. Set = group 2
+    # / 0x9B (values confirmed on a live speaker); state is the "D83Fre"
+    # field of the Kleernet JSON (group 3 / 0x57).
+    RevoxSelectDescription(
+        key="kleernet_band",
+        translation_key="kleernet_band",
+        entity_category=EntityCategory.CONFIG,
+        labels=KLEERNET_BAND_OPTIONS,
+        value=lambda st: st.kleernet_band,
+        set_fn=lambda client, band: client.set_kleernet_band(band),
+    ),
+)
 
 
 async def async_setup_entry(
@@ -30,13 +66,36 @@ async def async_setup_entry(
     async_add_entities: AddEntitiesCallback,
 ) -> None:
     coordinator = entry.runtime_data
-    async_add_entities(
-        [
-            RevoxChannelSelect(coordinator),
-            RevoxPowerOnSourceSelect(coordinator),
-            RevoxKleernetBandSelect(coordinator),
-        ]
-    )
+    entities: list[SelectEntity] = [RevoxChannelSelect(coordinator)]
+    entities.extend(RevoxSettingSelect(coordinator, desc) for desc in SELECTS)
+    async_add_entities(entities)
+
+
+class RevoxSettingSelect(RevoxEntity, SelectEntity):
+    """A numeric device setting presented by its app label."""
+
+    entity_description: RevoxSelectDescription
+
+    def __init__(
+        self, coordinator: RevoxCoordinator, desc: RevoxSelectDescription
+    ) -> None:
+        super().__init__(coordinator, desc.key)
+        self.entity_description = desc
+        self._attr_options = list(desc.labels.values())
+        self._label_to_value = {label: v for v, label in desc.labels.items()}
+
+    @property
+    def current_option(self) -> str | None:
+        st = self.coordinator.data
+        value = None if st is None else self.entity_description.value(st)
+        return None if value is None else self.entity_description.labels.get(value)
+
+    async def async_select_option(self, option: str) -> None:
+        await self.coordinator.async_command(
+            self.entity_description.set_fn(
+                self.coordinator.client, self._label_to_value[option]
+            )
+        )
 
 
 class RevoxChannelSelect(RevoxEntity, SelectEntity):
@@ -53,8 +112,7 @@ class RevoxChannelSelect(RevoxEntity, SelectEntity):
     _attr_options = CHANNEL_OPTIONS
 
     def __init__(self, coordinator: RevoxCoordinator) -> None:
-        super().__init__(coordinator)
-        self._attr_unique_id = f"{self._unique_base}_channel"
+        super().__init__(coordinator, "channel")
         self._optimistic: str | None = None
 
     @property
@@ -67,74 +125,15 @@ class RevoxChannelSelect(RevoxEntity, SelectEntity):
         return self._optimistic
 
     @property
-    def extra_state_attributes(self) -> dict:
+    def extra_state_attributes(self) -> dict[str, Any]:
         st = self.coordinator.data
         # ddms_state is the Wi-Fi multi-room state; Kleernet pairing is
         # reported separately by the "Partner speaker paired" binary sensor.
         return {"ddms_state": st.ddms_state if st else None}
 
     async def async_select_option(self, option: str) -> None:
-        cmd = CHANNEL_COMMANDS.get(option)
-        if not cmd:
-            return
+        await self.coordinator.async_command(
+            self.coordinator.client.set_channel(CHANNEL_COMMANDS[option])
+        )
         self._optimistic = option
-        await self.coordinator.client.set_channel(cmd)
         self.async_write_ha_state()
-
-
-class RevoxPowerOnSourceSelect(RevoxEntity, SelectEntity):
-    """Default source after manual power on (device field "PowerOnSrc").
-
-    Set = group 2 / 0x58 (ack {"PowerOnSrc":n}); every index was confirmed on
-    the wire by cycling the app's menu.
-    """
-
-    _attr_translation_key = "power_on_source"
-    _attr_entity_category = EntityCategory.CONFIG
-    _attr_options = list(POWER_ON_SOURCE_OPTIONS.values())
-
-    def __init__(self, coordinator: RevoxCoordinator) -> None:
-        super().__init__(coordinator)
-        self._attr_unique_id = f"{self._unique_base}_poweronsrc"
-
-    @property
-    def current_option(self) -> str | None:
-        st = self.coordinator.data
-        if st is None or st.power_on_source is None:
-            return None
-        return POWER_ON_SOURCE_OPTIONS.get(st.power_on_source)
-
-    async def async_select_option(self, option: str) -> None:
-        if (index := _POWER_ON_SOURCE_TO_ID.get(option)) is not None:
-            await self.coordinator.async_command(
-                self.coordinator.client.set_power_on_source(index)
-            )
-
-
-class RevoxKleernetBandSelect(RevoxEntity, SelectEntity):
-    """Kleernet wireless band between chief and client speakers.
-
-    Set = group 2 / 0x9B (values confirmed on a live speaker); state is the
-    "D83Fre" field of the Kleernet JSON (group 3 / 0x57).
-    """
-
-    _attr_translation_key = "kleernet_band"
-    _attr_entity_category = EntityCategory.CONFIG
-    _attr_options = list(KLEERNET_BAND_OPTIONS.values())
-
-    def __init__(self, coordinator: RevoxCoordinator) -> None:
-        super().__init__(coordinator)
-        self._attr_unique_id = f"{self._unique_base}_kleernet_band"
-
-    @property
-    def current_option(self) -> str | None:
-        st = self.coordinator.data
-        if st is None or st.kleernet_band is None:
-            return None
-        return KLEERNET_BAND_OPTIONS.get(st.kleernet_band)
-
-    async def async_select_option(self, option: str) -> None:
-        if (band := _KLEERNET_BAND_TO_ID.get(option)) is not None:
-            await self.coordinator.async_command(
-                self.coordinator.client.set_kleernet_band(band)
-            )

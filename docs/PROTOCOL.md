@@ -39,7 +39,7 @@ UTF-8 JSON object.
 | 2 | `0x30` | `0x31` | — | Preset list(?) | returned `[]` (all presets empty on the test device) |
 | 2 | `0x34` | `0x35` | `0x36` | **Loudness** ✓ | `0/1` — verified on a live speaker |
 | 2 | `0x37` | `0x38` | — | **Device status** | JSON: `SSID, MAC, RSSI, IP, SN, LS9, Kleernet, Controler, Name, Battery, STBY, volume, Brightness, UpdateMode, UpdateState, mcuType, AutoPowerOn, PowerOnSrc, netstate`. `RSSI` is a quality code, higher = worse: `2` = Good, `3` = Bad, `4` = Very bad (device-verified; `1` = Very good inferred) |
-| 2 | `0x33` | ? | — | **Play state read** | sent by the app on connect; the state is pushed as event op `0x33` |
+| 2 | `0x33` | — | — | **Play state read** | sent by the app on connect; no reply on port 50007 (the state is pushed as event op `0x33`) |
 | 2 | `0x3C` | `0x3D` | — | **Playback** | JSON: `{"source":4,"state":1,"volume":22,"url":"","title":"…","albumUrl":"https://…"}` — `state`: `0` = stopped, `1` = playing (paused also reports `0`; "paused" only exists in the event pushes). `title`/`albumUrl` are present while a track is loaded |
 | 2 | `0x41` | `0x42` | `0x43` | **Aux-In high sensitivity** ✓ | `0/1` — verified on a live speaker |
 | 2 | `0x47` | `0x48` | — | unknown flag | value `0` in capture |
@@ -51,7 +51,7 @@ UTF-8 JSON object.
 | 2 | `0x99`* | `0x9A` | `0x9B` | **Kleernet wireless band** ✓ | `0` = automatic, `1` = 2.4G, `2` = 5.2G, `3` = 5.8G (device-verified); state = `D83Fre` in the Kleernet JSON |
 | 2 | — | `0x9D` | `0x9E` | **Disable auto aux** ✓ | `1` = Aux-In trigger **off** (inverted!) — verified on a live speaker; state = `DisAutoAux` in the Kleernet JSON |
 | 3 | `0x01` | — | — | **Enter Kleernet pairing mode** (probable) | empty payload, never answers. Sent by the app after an unpair; the partner reappeared ~11 s later with no further network traffic |
-| 3 | `0x03` | `0x04` | `0x05` | **Multi-room state / UNPAIR a speaker** ✓ | get returns JSON `{"state":2,"LRreverse":0,"paired":[{"type":"A100","name":"…","ID":"…","volume":48,"channel":1,"battery":255}]}`. The **set `0x05` UNPAIRS** the partner whose **serial number** is given as bare ASCII (e.g. `SAAD11958`) — packet-capture verified, `paired[]` empties ~4 s later. It does *not* pair |
+| 3 | `0x03` | `0x04` | `0x05` | **Multi-room state / UNPAIR a speaker** ✓ | get returns JSON `{"state":2,"LRreverse":0,"paired":[{"type":"A100","name":"…","ID":"…","volume":48,"channel":1,"battery":255}]}`. The **set `0x05` UNPAIRS** the partner whose **serial number** is given as bare ASCII (e.g. `SAAD11958`) — packet-capture verified, `paired[]` empties ~4 s later. It does *not* pair. A partner's `volume` follows the chief's volume (it lags by one poll during a ramp) |
 | 3 | `0x06` | `0x07` | `0x08` | unknown setting | `{"value":n,"ID":""}` — read `6` on an A100 with a partner bound. Discovered by scanning. **Not pairing-related**: unchanged across a full unpair/re-pair cycle |
 | 3 | `0x09` | `0x0A` | `0x0B` | unknown setting | `{"value":n,"ID":""}` — read `0` |
 | 3 | `0x0C` | `0x0D` | `0x0E` | unknown setting | `{"value":n,"ID":""}` — read `0` |
@@ -100,20 +100,25 @@ speaker -> client:  [00 00 VV 00][OP][ST][uint16 crc][uint16 len BE][payload]
 client sends the checksum bytes as zeros — the speaker accepts that; replies
 carry a 16-bit checksum which can be ignored.
 
+The status byte `ST` (consistent across every capture): `0` = unsolicited
+push, `1` = reply to a request (e.g. the `0x03` handshake, the `0x40` volume
+query, the empty ack of a `0x6A` send), `2` = error / not supported.
+
 | Op | Direction | Meaning |
 |---|---|---|
 | `0x03` | c→s | subscribe/handshake (empty payload) |
-| `0x0A` / `0x32` | s→c | source changed push — payload is the ASCII source id (e.g. `"19"`) |
-| `0x2A` / `0x2D` | s→c | **"PlayView" push**: JSON with now-playing metadata — `TrackName`, `Artist`, `Album`, `CoverArtUrl`, `TotalTime` (ms), `PlayState`, `Current Source`, `Shuffle`, `Repeat`, `PlayUrl` (sent twice, once per op) |
+| `0x0A` / `0x32` | s→c | source changed push — payload is the ASCII source id (e.g. `"19"`). `0x32` first sends a transient **`"0"`** at the start of a source switch or an AirPlay session, ~0.1–3 s before the real id; the playback JSON never reports `0`, so ignore it |
+| `0x2A` / `0x2D` | s→c | **"PlayView" push**: `{"CMD ID":3,"Title":"PlayView","Window CONTENTS":{…}}` with now-playing metadata — `TrackName`, `Artist`, `Album`, `Genre`, `CoverArtUrl`, `TotalTime` (ms), `Current_time` (`-1`), `PlayState`, `Current Source`, `Shuffle`, `Repeat`, `PlayUrl` (e.g. `spotify:track:…`), capability flags `Next`/`Prev`/`Seek`, and `BitDepth`/`SampleRate`/`BitRate`/`Mime`. Sent twice, once per op, in bursts of 2–3 on every play-state change |
 | `0x31` | s→c | playback position push in ms, ~1/second while playing |
-| `0x33` | s→c | play-state push — **ASCII `0` = playing/active, `2` = paused** (NB: a *different* enum than the playback JSON's `state`!). Fires for AirPlay/Spotify too, enabling instant state in HA |
-| `0x40` | c→s (`VV=0x01`) | volume query — reply payload is the ASCII volume; also pushed on volume changes |
+| `0x33` | s→c | play-state push — **ASCII `0` = playing/active, `2` = paused** (NB: a *different* enum than the playback JSON's `state`!). Fires for AirPlay/Spotify too, enabling instant state in HA. `1` appears once at the start of an AirPlay session (together with the source-`0` push, ~4 s before `0`) — a transitional "starting" value, not a state |
+| `0x40` | c→s (`VV=0x01`) | volume query — reply payload is the ASCII volume; also pushed on volume changes. Volume changed on an **AirPlay sender** arrives *only* as these pushes (no mirrored `0x2A` set), in steps of ~6 during a ramp; the playback JSON trails by ~0.2–0.5 s |
 | `0x46` | s→c | `SPEAKER_ACTIVE,<source id>` push |
-| `0x67` | s→c | multi-room channel status push: `FREE,STEREO,<concurrent-SSID>` (pair-state, channel) |
+| `0x67` | s→c | DDMS / channel status: `FREE,STEREO,<concurrent-SSID>` (DDMS state, channel). **Not a change event**: the speaker sends it ~0.1 s after *every* group 3 / `0x03` get from any client (161 of 161 times across the captures) and in answer to `SETSTEREO`/`SETLEFT`/`SETRIGHT`. Only a changed value carries information |
 | `0x6A` | c→s | send a bare ASCII command — **this is how the app sends `SETSTEREO` / `SETLEFT` / `SETRIGHT`** |
-| `0x70` | s→c | **mirror push**: wraps every binary frame the speaker *receives* on port 50007, from any client — sets carry the new value, so subscribers learn about every change instantly |
+| `0x70` | s→c | **mirror push**: wraps every binary frame the speaker *receives* on port 50007, from any client — sets carry the new value, so subscribers learn about every change instantly. Gets are mirrored too, **including the subscriber's own polls** — a client that treats every mirror frame as "something changed, re-poll" polls itself in a loop |
 | `0xD0` | c→s | ASCII query, e.g. `READ_fwdownload_xml` → `fwdownload_xml:http://update.revox.de/Studioproducts/A100ATMEL/fw_update.xml` |
 | `0xD1` | s→c | Bluetooth event push, e.g. `btdisconnect` |
+| `0xDB` | c→s | `zone volume control` — the app sends it empty when opening the speaker settings; the speaker answers with status `2` (not supported in this setup) |
 | `0xE6` | s→c | sample rate push when a stream starts, e.g. `48000` |
 | `0xEE` | s→c | empty stream-start marker |
 
@@ -347,7 +352,7 @@ This is the single most useful thing to know before hunting for more commands.
 | Runs | Wi-Fi, streaming, AirPlay/Spotify/Cast, DDMS | Revox-specific hardware |
 | Owns | **port 7777 (LUCI)**, the NV store | **port 50007 (group 2/3)** |
 | Features | multi-room over Wi-Fi, NV items, LED, standby | **Kleernet radio**, battery, loudness, aux, volume knob, power |
-| Firmware | `LS9 V3957` (what we dumped) | `Controler V44` (`mcuType: ATMEL`) |
+| Firmware | `LS9 V3957` (what we dumped) | `Controler V44` (device status `mcuType: 1`) |
 
 The two are joined by a **UART** (`/dev/ttyS0`, NV `HOST_BAUDRATE`, `UART_Mode`,
 `hostpresent`, `xmodem_pkt_size`; LUCI messages `Host version info`,
@@ -408,7 +413,11 @@ followed automatically on rediscovery.
 | `binary_sensor` Battery charging (chief + paired) | battery byte `254` in status reads | **Verified on a live speaker** |
 
 Battery byte encoding: `0-100` = state of charge, `254` = charging (the SoC
-is not reported while charging), `255` = fully charged / on mains.
+is not reported while charging), `255` = fully charged / on mains. The same
+encoding is used for the partner in `paired[]`. Battery is **poll-only**: no
+push was seen in either charging capture (the LUCI `BatteryPower` op `0xE8`
+never appears on the wire), and after unplugging, the chief went straight from
+`254` to a real SoC (`49`, then `48`).
 
 The `STBY` flag in the device status is `1` even while actively playing, so
 it cannot indicate a power state — this is why the integration has no power
@@ -509,7 +518,7 @@ a sparse namespace — everything above `0x58` is silent. The full map:
 
 | Cmds | Meaning |
 |---|---|
-| `0x03` / `0x04` / `0x05` | multi-room state, **pair by serial** |
+| `0x03` / `0x04` / `0x05` | multi-room state, **unpair by serial** |
 | `0x06` / `0x07` / `0x08` | unidentified — read `6` |
 | `0x09` / `0x0A` / `0x0B` | unidentified — read `0` |
 | `0x0C` / `0x0D` / `0x0E` | unidentified — read `0` |

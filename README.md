@@ -78,6 +78,10 @@ and enter the speaker's IP address — you can find it in the StudioART app
 under speaker settings. The integration identifies the speaker by its serial
 number, so a changing DHCP address is handled automatically.
 
+If the speaker moves to a new address that discovery does not pick up, use
+**Reconfigure** in the integration's three-dot menu to enter the new IP — the
+entry, its entities and their history are kept.
+
 ## Announcements & text-to-speech
 
 The media player works directly with Home Assistant's TTS and media browser:
@@ -155,6 +159,10 @@ python3 tools/revox_cli.py 192.168.42.163 status
 
 The `revox_studioart.send_command` service exposes the raw ASCII and binary
 command channels for experiments from within Home Assistant.
+
+Tests come in two suites: `pytest` runs the protocol tests (no Home Assistant
+needed), and `pytest tests_ha` runs the integration against a real Home
+Assistant core (requires `pip install pytest-homeassistant-custom-component`).
 
 ## Disclaimer
 

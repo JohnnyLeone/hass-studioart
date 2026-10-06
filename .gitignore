@@ -15,3 +15,8 @@ fw/
 *.bin
 83_IMAGE_NETWORK*
 .omx/
+
+# Packet captures: they contain the home network (IPs, SSID, device
+# serials) — never commit.
+*.pcap
+*.pcapng

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 from homeassistant.components.button import ButtonDeviceClass, ButtonEntity
 from homeassistant.const import EntityCategory
 from homeassistant.core import HomeAssistant
@@ -45,11 +47,10 @@ class RevoxRestartButton(RevoxEntity, ButtonEntity):
     _attr_entity_category = EntityCategory.CONFIG
 
     def __init__(self, coordinator: RevoxCoordinator) -> None:
-        super().__init__(coordinator)
-        self._attr_unique_id = f"{self._unique_base}_restart"
+        super().__init__(coordinator, "restart")
 
     async def async_press(self) -> None:
-        await self.coordinator.client.restart()
+        await self.coordinator.async_command(self.coordinator.client.restart())
 
 
 class RevoxCheckP100Button(RevoxEntity, ButtonEntity):
@@ -64,13 +65,12 @@ class RevoxCheckP100Button(RevoxEntity, ButtonEntity):
     _attr_entity_category = EntityCategory.DIAGNOSTIC
 
     def __init__(self, coordinator: RevoxCoordinator) -> None:
-        super().__init__(coordinator)
         # unique_id kept from the earlier "identify paired" incarnation so
         # the registry entry (and history) survives the rename
-        self._attr_unique_id = f"{self._unique_base}_identify_paired"
+        super().__init__(coordinator, "identify_paired")
 
     async def async_press(self) -> None:
-        await self.coordinator.client.check_p100()
+        await self.coordinator.async_command(self.coordinator.client.check_p100())
 
 
 class RevoxKleernetPairModeButton(RevoxEntity, ButtonEntity):
@@ -86,12 +86,12 @@ class RevoxKleernetPairModeButton(RevoxEntity, ButtonEntity):
     _attr_entity_category = EntityCategory.CONFIG
 
     def __init__(self, coordinator: RevoxCoordinator) -> None:
-        super().__init__(coordinator)
-        self._attr_unique_id = f"{self._unique_base}_kleernet_pair_mode"
+        super().__init__(coordinator, "kleernet_pair_mode")
 
     async def async_press(self) -> None:
-        await self.coordinator.client.kleernet_pair_mode()
-        await self.coordinator.async_request_refresh()
+        await self.coordinator.async_command(
+            self.coordinator.client.kleernet_pair_mode()
+        )
 
 
 class RevoxKleernetUnpairButton(RevoxEntity, ButtonEntity):
@@ -113,11 +113,10 @@ class RevoxKleernetUnpairButton(RevoxEntity, ButtonEntity):
     _attr_entity_category = EntityCategory.CONFIG
 
     def __init__(self, coordinator: RevoxCoordinator) -> None:
-        super().__init__(coordinator)
-        self._attr_unique_id = f"{self._unique_base}_kleernet_unpair"
+        super().__init__(coordinator, "kleernet_unpair")
 
     @property
-    def _partner(self) -> dict | None:
+    def _partner(self) -> dict[str, Any] | None:
         """The single bound partner; None when there are zero or several."""
         st = self.coordinator.data
         return st.kleernet_partner if st else None
@@ -127,7 +126,7 @@ class RevoxKleernetUnpairButton(RevoxEntity, ButtonEntity):
         return super().available and self._partner is not None
 
     @property
-    def extra_state_attributes(self) -> dict:
+    def extra_state_attributes(self) -> dict[str, Any]:
         """Show which speaker this will unpair, so the button is not a mystery."""
         partner = self._partner
         if partner is None:

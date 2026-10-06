@@ -97,9 +97,8 @@ class RevoxSwitch(RevoxEntity, SwitchEntity):
     def __init__(
         self, coordinator: RevoxCoordinator, desc: RevoxSwitchDescription
     ) -> None:
-        super().__init__(coordinator)
+        super().__init__(coordinator, desc.key)
         self.entity_description = desc
-        self._attr_unique_id = f"{self._unique_base}_{desc.key}"
         # last commanded value, used while the device does not report state
         # (e.g. loudness before the first poll confirms it)
         self._optimistic: bool | None = None
@@ -113,10 +112,10 @@ class RevoxSwitch(RevoxEntity, SwitchEntity):
         return self._optimistic
 
     async def _set(self, on: bool) -> None:
-        self._optimistic = on
         await self.coordinator.async_command(
             self.entity_description.set_fn(self.coordinator.client, on)
         )
+        self._optimistic = on
         self.async_write_ha_state()
 
     async def async_turn_on(self, **kwargs: Any) -> None:
@@ -136,8 +135,7 @@ class RevoxBassBoostSwitch(RevoxEntity, RestoreEntity, SwitchEntity):
     _attr_translation_key = "bass_boost"
 
     def __init__(self, coordinator: RevoxCoordinator) -> None:
-        super().__init__(coordinator)
-        self._attr_unique_id = f"{self._unique_base}_bassboost"
+        super().__init__(coordinator, "bassboost")
         self._state = False
 
     async def async_added_to_hass(self) -> None:
@@ -150,7 +148,7 @@ class RevoxBassBoostSwitch(RevoxEntity, RestoreEntity, SwitchEntity):
         return self._state
 
     async def _set(self, on: bool) -> None:
-        await self.coordinator.client.set_bass_boost(on)
+        await self.coordinator.async_command(self.coordinator.client.set_bass_boost(on))
         self._state = on
         self.async_write_ha_state()
 
