@@ -9,7 +9,7 @@ from homeassistant.helpers.device_registry import CONNECTION_NETWORK_MAC, Device
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 from .const import DEFAULT_NAME, DOMAIN, MANUFACTURER
-from .coordinator import RevoxCoordinator
+from .coordinator import RevoxCoordinator, firmware_version
 
 
 class RevoxEntity(CoordinatorEntity[RevoxCoordinator]):
@@ -45,13 +45,6 @@ def _device_info(coordinator: RevoxCoordinator) -> DeviceInfo:
     connections = set()
     if st and st.mac:
         connections.add((CONNECTION_NETWORK_MAC, st.mac.lower()))
-    # one unified firmware string ("V3957 / Controller V44"); the parts are
-    # the LS9 main firmware and the controller version from the device status
-    sw_version = None
-    if st and st.firmware_ls9:
-        sw_version = st.firmware_ls9
-        if st.firmware_controller:
-            sw_version = f"{st.firmware_ls9} / Controller {st.firmware_controller}"
     return DeviceInfo(
         identifiers={(DOMAIN, coordinator.unique_base)},
         connections=connections,
@@ -59,6 +52,6 @@ def _device_info(coordinator: RevoxCoordinator) -> DeviceInfo:
         model="STUDIOART A100",
         name=(st.name if st else None) or DEFAULT_NAME,
         serial_number=st.serial if st else None,
-        sw_version=sw_version,
+        sw_version=firmware_version(st),
         configuration_url=f"http://{host}",
     )

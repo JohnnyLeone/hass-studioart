@@ -133,6 +133,8 @@ class RevoxBassBoostSwitch(RevoxEntity, RestoreEntity, SwitchEntity):
     """
 
     _attr_translation_key = "bass_boost"
+    # state is the last command sent, not read back: the UI shows both buttons
+    _attr_assumed_state = True
 
     def __init__(self, coordinator: RevoxCoordinator) -> None:
         super().__init__(coordinator, "bassboost")

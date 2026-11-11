@@ -34,6 +34,8 @@ class RevoxMaxVolume(RevoxEntity, RestoreNumber):
     _attr_native_step = 1
     _attr_mode = NumberMode.SLIDER
     _attr_entity_category = EntityCategory.CONFIG
+    # value is the last command sent, not read back from the speaker
+    _attr_assumed_state = True
 
     def __init__(self, coordinator: RevoxCoordinator) -> None:
         super().__init__(coordinator, "maxvolume")

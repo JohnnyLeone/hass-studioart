@@ -2,13 +2,17 @@
 
 from __future__ import annotations
 
+from ipaddress import ip_address
+
 import pytest
-from homeassistant.config_entries import SOURCE_USER, ConfigEntryState
+from homeassistant.config_entries import SOURCE_USER, SOURCE_ZEROCONF, ConfigEntryState
 from homeassistant.const import CONF_HOST, CONF_PORT, STATE_UNAVAILABLE
 from homeassistant.core import HomeAssistant
 from homeassistant.data_entry_flow import FlowResultType
 from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
+from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
+from homeassistant.helpers.service_info.zeroconf import ZeroconfServiceInfo
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.revox_studioart.api import RevoxError
@@ -106,6 +110,47 @@ async def test_entity_states(hass, client, entry):
     assert unpair.attributes["target_serial"] == "SAAD11958"
 
 
+async def test_media_player_attributes_stay_lean(hass, client, entry):
+    """Values with their own entity must not be repeated as attributes."""
+    await _setup(hass, entry)
+    player = hass.states.get(_entity_id(hass, "media_player", "media_player"))
+    assert player.attributes["raw_source_index"] == 19
+    for dropped in ("battery", "wifi_rssi", "paired_details", "ddms_state"):
+        assert dropped not in player.attributes
+
+
+async def test_unconfirmed_settings_are_assumed_state(hass, client, entry):
+    await _setup(hass, entry)
+    for platform, key in (("switch", "bassboost"), ("number", "maxvolume")):
+        state = hass.states.get(_entity_id(hass, platform, key))
+        assert state.attributes["assumed_state"] is True, key
+    # a switch the speaker reports back is not
+    loudness = hass.states.get(_entity_id(hass, "switch", "loudness"))
+    assert "assumed_state" not in loudness.attributes
+
+
+async def test_device_registry_follows_firmware_and_name(hass, client, entry):
+    await _setup(hass, entry)
+    registry = dr.async_get(hass)
+    device = registry.async_get_device(identifiers={(DOMAIN, SERIAL)})
+    assert device.sw_version == "V3957 / Controller V44"
+
+    client.async_get_state.return_value = make_state(
+        firmware_ls9="V4001", name="Kitchen"
+    )
+    await entry.runtime_data.async_refresh()
+    await hass.async_block_till_done()
+    device = registry.async_get_device(identifiers={(DOMAIN, SERIAL)})
+    assert device.sw_version == "V4001 / Controller V44"
+    assert device.name == "Kitchen"
+
+    # a poll without firmware (e.g. mid-update) leaves the card alone
+    client.async_get_state.return_value = make_state(firmware_ls9=None)
+    await entry.runtime_data.async_refresh()
+    device = registry.async_get_device(identifiers={(DOMAIN, SERIAL)})
+    assert device.sw_version == "V4001 / Controller V44"
+
+
 async def test_battery_holds_last_soc_while_charging(hass, client, entry):
     await _setup(hass, entry)
     coordinator = entry.runtime_data
@@ -173,7 +218,7 @@ async def test_commands_reach_the_client(hass, client, entry):
 
 async def test_unknown_source_is_rejected(hass, client, entry):
     await _setup(hass, entry)
-    with pytest.raises(ServiceValidationError):
+    with pytest.raises(ServiceValidationError) as err:
         await hass.services.async_call(
             "media_player",
             "select_source",
@@ -183,16 +228,20 @@ async def test_unknown_source_is_rejected(hass, client, entry):
             },
             blocking=True,
         )
+    assert err.value.translation_key == "unknown_source"
+    assert 'Unknown source "Tape"' in str(err.value)
 
 
 async def test_command_failure_is_a_readable_error(hass, client, entry):
     await _setup(hass, entry)
     client.set_bass_boost.side_effect = RevoxError("connection refused")
     switch = _entity_id(hass, "switch", "bassboost")
-    with pytest.raises(HomeAssistantError, match="connection refused"):
+    with pytest.raises(HomeAssistantError, match="connection refused") as err:
         await hass.services.async_call(
             "switch", "turn_on", {"entity_id": switch}, blocking=True
         )
+    assert err.value.translation_key == "command_failed"
+    assert str(err.value) == f"Command to {HOST} failed: connection refused"
     # a failed command must not flip the optimistic state
     assert hass.states.get(switch).state == "off"
 
@@ -227,7 +276,7 @@ async def test_unpair_service_uses_the_bound_partner(hass, client, entry):
 
 async def test_unpair_service_rejects_unknown_serial(hass, client, entry):
     await _setup(hass, entry)
-    with pytest.raises(ServiceValidationError):
+    with pytest.raises(ServiceValidationError, match="SNOPE0000 is not paired"):
         await hass.services.async_call(
             DOMAIN,
             "unpair_speaker",
@@ -321,3 +370,52 @@ async def test_reconfigure_refuses_a_different_speaker(hass, client, entry):
     )
     assert result["reason"] == "wrong_device"
     assert entry.data[CONF_HOST] == HOST
+
+
+def _discovery(host: str = HOST, model: str = "RevoxA100") -> ZeroconfServiceInfo:
+    return ZeroconfServiceInfo(
+        ip_address=ip_address(host),
+        ip_addresses=[ip_address(host)],
+        port=7000,
+        hostname="Buero1.local.",
+        type="_raop._tcp.local.",
+        name="AABBCCDDEEFF@Buero1._raop._tcp.local.",
+        properties={"am": model},
+    )
+
+
+async def test_zeroconf_discovery_and_confirm(hass, client):
+    result = await hass.config_entries.flow.async_init(
+        DOMAIN, context={"source": SOURCE_ZEROCONF}, data=_discovery()
+    )
+    assert result["type"] is FlowResultType.FORM
+    assert result["step_id"] == "confirm"
+    result = await hass.config_entries.flow.async_configure(result["flow_id"], {})
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert result["title"] == "Buero1"
+    assert result["result"].unique_id == SERIAL
+
+
+async def test_zeroconf_ignores_other_airplay_devices(hass, client):
+    result = await hass.config_entries.flow.async_init(
+        DOMAIN, context={"source": SOURCE_ZEROCONF}, data=_discovery(model="AppleTV6,2")
+    )
+    assert result["reason"] == "not_studioart"
+    client.async_get_state.assert_not_awaited()
+
+
+async def test_zeroconf_updates_host_of_known_speaker(hass, client, entry):
+    await _setup(hass, entry)
+    result = await hass.config_entries.flow.async_init(
+        DOMAIN, context={"source": SOURCE_ZEROCONF}, data=_discovery("192.0.2.77")
+    )
+    assert result["reason"] == "already_configured"
+    assert entry.data[CONF_HOST] == "192.0.2.77"
+
+
+async def test_zeroconf_cannot_connect(hass, client):
+    client.async_get_state.side_effect = RevoxError("down")
+    result = await hass.config_entries.flow.async_init(
+        DOMAIN, context={"source": SOURCE_ZEROCONF}, data=_discovery()
+    )
+    assert result["reason"] == "cannot_connect"

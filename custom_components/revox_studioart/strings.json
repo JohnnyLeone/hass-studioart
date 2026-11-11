@@ -164,5 +164,37 @@
         }
       }
     }
+  },
+  "exceptions": {
+    "update_failed": {
+      "message": "Could not read the speaker's state: {error}"
+    },
+    "command_failed": {
+      "message": "Command to {host} failed: {error}"
+    },
+    "unknown_source": {
+      "message": "Unknown source \"{source}\". Choose one of: {sources}."
+    },
+    "unsupported_media_url": {
+      "message": "Only http(s) URLs can be played, got: {url}"
+    },
+    "unpair_ambiguous": {
+      "message": "Expected exactly one paired partner speaker. Use the Unpair partner speaker action with a serial number to choose which one to unpair."
+    },
+    "unpair_several_partners": {
+      "message": "Several partner speakers are paired ({paired}). Pass a serial number to choose one."
+    },
+    "unpair_no_partner": {
+      "message": "No partner speaker is paired to this speaker."
+    },
+    "unpair_serial_not_paired": {
+      "message": "{serial} is not paired to this speaker (paired: {paired})."
+    },
+    "invalid_config_entry": {
+      "message": "\"{entry_id}\" is not a Revox STUDIOART speaker."
+    },
+    "entry_not_loaded": {
+      "message": "Speaker {name} is not loaded."
+    }
   }
 }

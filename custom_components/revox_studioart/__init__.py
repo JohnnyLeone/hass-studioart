@@ -91,16 +91,21 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
             # kleernet_partner is None unless exactly one is paired.
             partner = state.kleernet_partner if state else None
             if partner is None:
+                if bound:
+                    raise ServiceValidationError(
+                        translation_domain=DOMAIN,
+                        translation_key="unpair_several_partners",
+                        translation_placeholders={"paired": ", ".join(bound)},
+                    )
                 raise ServiceValidationError(
-                    "Several partner speakers are paired "
-                    f"({', '.join(bound)}); pass 'serial' to choose one"
-                    if bound
-                    else "No partner speaker is paired to this device"
+                    translation_domain=DOMAIN, translation_key="unpair_no_partner"
                 )
             serial = partner["ID"]
         elif bound and serial not in bound:
             raise ServiceValidationError(
-                f"{serial} is not paired to this device (paired: {', '.join(bound)})"
+                translation_domain=DOMAIN,
+                translation_key="unpair_serial_not_paired",
+                translation_placeholders={"serial": serial, "paired": ", ".join(bound)},
             )
 
         await coordinator.async_command(
@@ -128,11 +133,17 @@ def _resolve_coordinator(hass: HomeAssistant, entry_id: str) -> RevoxCoordinator
         loaded = hass.config_entries.async_loaded_entries(DOMAIN)
         if len(loaded) != 1:
             raise ServiceValidationError(
-                f"{entry_id!r} is not a Revox STUDIOART config entry"
+                translation_domain=DOMAIN,
+                translation_key="invalid_config_entry",
+                translation_placeholders={"entry_id": entry_id},
             )
         entry = loaded[0]
     if entry.state is not ConfigEntryState.LOADED:
-        raise ServiceValidationError(f"Speaker {entry.title} is not loaded")
+        raise ServiceValidationError(
+            translation_domain=DOMAIN,
+            translation_key="entry_not_loaded",
+            translation_placeholders={"name": entry.title},
+        )
     return entry.runtime_data
 
 
