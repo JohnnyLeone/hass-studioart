@@ -10,7 +10,7 @@ from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
-from .const import UNPAIR_SETTLE_SECONDS
+from .const import DOMAIN, UNPAIR_SETTLE_SECONDS
 from .coordinator import RevoxConfigEntry, RevoxCoordinator
 from .entity import RevoxEntity
 
@@ -137,9 +137,7 @@ class RevoxKleernetUnpairButton(RevoxEntity, ButtonEntity):
         partner = self._partner
         if partner is None:
             raise HomeAssistantError(
-                "Expected exactly one paired partner speaker. Use the "
-                "revox_studioart.unpair_speaker service with a 'serial' to "
-                "choose which one to unpair."
+                translation_domain=DOMAIN, translation_key="unpair_ambiguous"
             )
         await self.coordinator.async_command(
             self.coordinator.client.kleernet_unpair(partner["ID"]),

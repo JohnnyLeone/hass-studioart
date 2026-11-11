@@ -12,6 +12,7 @@ from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import CONF_HOST
 from homeassistant.core import HomeAssistant, callback
 from homeassistant.exceptions import HomeAssistantError
+from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers.debounce import Debouncer
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 
@@ -21,6 +22,19 @@ from .const import DEFAULT_SCAN_INTERVAL, DOMAIN
 _LOGGER = logging.getLogger(__name__)
 
 type RevoxConfigEntry = ConfigEntry[RevoxCoordinator]
+
+
+def firmware_version(state: RevoxState | None) -> str | None:
+    """One firmware string for the device card: "V3957 / Controller V44".
+
+    The parts are the LS9 main firmware and the controller version from the
+    device status.
+    """
+    if state is None or not state.firmware_ls9:
+        return None
+    if state.firmware_controller:
+        return f"{state.firmware_ls9} / Controller {state.firmware_controller}"
+    return state.firmware_ls9
 
 
 class RevoxCoordinator(DataUpdateCoordinator[RevoxState]):
@@ -53,10 +67,37 @@ class RevoxCoordinator(DataUpdateCoordinator[RevoxState]):
         try:
             state = await self.client.async_get_state()
         except RevoxError as err:
-            raise UpdateFailed(str(err)) from err
+            raise UpdateFailed(
+                translation_domain=DOMAIN,
+                translation_key="update_failed",
+                translation_placeholders={"error": str(err)},
+            ) from err
         if self.data is None and state.serial:
             self.unique_base = state.serial
+        elif self.data is not None:
+            self._sync_device_registry(state)
         return state
+
+    def _sync_device_registry(self, state: RevoxState) -> None:
+        """Carry firmware and name changes onto the existing device.
+
+        Entities hand Home Assistant their device info only when they are
+        added, so without this a firmware update or a rename in the app would
+        show on the device card only after a restart.
+        """
+        old = self.data
+        sw_version = firmware_version(state)
+        changes: dict[str, str] = {}
+        if sw_version and sw_version != firmware_version(old):
+            changes["sw_version"] = sw_version
+        if state.name and state.name != old.name:
+            changes["name"] = state.name
+        if not changes:
+            return
+        registry = dr.async_get(self.hass)
+        device = registry.async_get_device(identifiers={(DOMAIN, self.unique_base)})
+        if device is not None:
+            registry.async_update_device(device.id, **changes)
 
     async def async_command(
         self, coro: Coroutine[Any, Any, Any], *, settle: float = 0.0
@@ -75,7 +116,9 @@ class RevoxCoordinator(DataUpdateCoordinator[RevoxState]):
             await coro
         except RevoxError as err:
             raise HomeAssistantError(
-                f"Command to {self.client.host} failed: {err}"
+                translation_domain=DOMAIN,
+                translation_key="command_failed",
+                translation_placeholders={"host": self.client.host, "error": str(err)},
             ) from err
         await self.async_request_refresh()
         if settle > 0:

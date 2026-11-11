@@ -124,10 +124,24 @@ AirPlay provider, which does handle resume.)
   Kleernet, so the partner may need putting into pairing mode as well, and
   it can take ten seconds or so before it reappears.
 - **"Paired" means Kleernet, not Wi-Fi.** The *Partner speaker paired* sensor
-  reflects the actual Kleernet bind. The separate `ddms_state` attribute is
-  the Wi-Fi multi-room state and stays `FREE` even with a partner bound.
+  reflects the actual Kleernet bind. The `ddms_state` attribute of the
+  *Multi-room speaker setting* select is the Wi-Fi multi-room state and stays
+  `FREE` even with a partner bound.
 - **Restart button** makes the speaker drop off the network for a short
   while; the integration shows it as unavailable until it reconnects.
+
+- **Updates.** Changes arrive live over the speaker's event channel; a poll
+  every 10 seconds fills in anything the push does not carry. Firmware
+  version and speaker name on the device card follow along without a restart.
+
+## Removing the integration
+
+1. **Settings → Devices & Services → Revox STUDIOART** → three-dot menu of the
+   speaker → **Delete**. Repeat for each speaker.
+2. If you installed through HACS and no longer want it: HACS → **Revox
+   STUDIOART** → three-dot menu → **Remove**, then restart Home Assistant.
+
+Nothing is changed on the speaker itself.
 
 ## Troubleshooting
 

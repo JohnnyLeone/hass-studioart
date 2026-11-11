@@ -1,0 +1,95 @@
+# Self-assessment against the Home Assistant Integration Quality Scale
+# (https://developers.home-assistant.io/docs/core/integration-quality-scale/).
+# hassfest only enforces this file for core integrations; here it is a
+# checklist of what is covered and what is left.
+rules:
+  # Bronze
+  action-setup: done
+  appropriate-polling:
+    status: done
+    comment: 10 s poll as a fallback; the port-7777 push channel delivers changes live.
+  brands: done
+  common-modules: done
+  config-flow: done
+  config-flow-test-coverage: done
+  dependency-transparency:
+    status: done
+    comment: No external requirements; the protocol client ships in api.py.
+  docs-actions: done
+  docs-conditions:
+    status: exempt
+    comment: The integration provides no conditions.
+  docs-high-level-description: done
+  docs-installation-instructions: done
+  docs-removal-instructions: done
+  docs-triggers:
+    status: exempt
+    comment: The integration provides no triggers.
+  entity-event-setup:
+    status: done
+    comment: >-
+      Entities do not subscribe to events themselves; the coordinator owns the
+      push channel, started in async_setup_entry and stopped via async_on_unload.
+  entity-unique-id: done
+  has-entity-name: done
+  runtime-data: done
+  test-before-configure: done
+  test-before-setup: done
+  unique-config-entry: done
+
+  # Silver
+  action-exceptions: done
+  config-entry-unloading: done
+  docs-configuration-parameters:
+    status: exempt
+    comment: There is no options flow.
+  docs-installation-parameters: done
+  entity-unavailable: done
+  integration-owner: done
+  log-when-unavailable: done
+  parallel-updates: done
+  reauthentication-flow:
+    status: exempt
+    comment: The speaker's local protocol has no authentication.
+  test-coverage:
+    status: todo
+    comment: >-
+      tests_ha covers about 89% of the HA-facing modules (api.py is tested
+      separately by tests/); diagnostics and some media-player paths are the
+      gaps to the 95% target.
+
+  # Gold
+  devices: done
+  diagnostics: done
+  discovery: done
+  discovery-update-info: done
+  docs-data-update: done
+  docs-examples: done
+  docs-known-limitations: done
+  docs-supported-devices: done
+  docs-supported-functions: done
+  docs-troubleshooting: done
+  docs-use-cases: done
+  dynamic-devices:
+    status: exempt
+    comment: Each config entry is exactly one speaker.
+  entity-category: done
+  entity-device-class: done
+  entity-disabled-by-default: done
+  entity-translations: done
+  exception-translations: done
+  icon-translations: done
+  reconfiguration-flow: done
+  repair-issues:
+    status: exempt
+    comment: No condition currently needs user action through a repair issue.
+  stale-devices:
+    status: exempt
+    comment: Each config entry is exactly one speaker, removed with its entry.
+
+  # Platinum
+  async-dependency: done
+  inject-websession:
+    status: exempt
+    comment: The speaker speaks raw TCP, not HTTP.
+  strict-typing: todo

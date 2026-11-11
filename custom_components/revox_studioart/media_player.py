@@ -22,7 +22,7 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.util import dt as dt_util
 
 from .api import RevoxState
-from .const import SOURCE_COMMANDS, SOURCE_ID_TO_NAME, SOURCE_IDS
+from .const import DOMAIN, SOURCE_COMMANDS, SOURCE_ID_TO_NAME, SOURCE_IDS
 from .coordinator import RevoxConfigEntry, RevoxCoordinator
 from .entity import RevoxEntity
 
@@ -186,24 +186,12 @@ class RevoxMediaPlayer(RevoxEntity, MediaPlayerEntity):
 
     @property
     def extra_state_attributes(self) -> dict[str, Any]:
+        # Only the raw source id, which helps identify sources the
+        # integration has no name for yet. Everything else that used to live
+        # here (battery, Wi-Fi, pairing, ...) has its own entity; repeating it
+        # as attributes wrote a new media-player history row on every change.
         st = self.coordinator.data
-        if st is None:
-            return {}
-        return {
-            "battery": st.battery,
-            "battery_charging": st.battery_charging,
-            "standby_flag": st.standby,
-            "wifi_ssid": st.ssid,
-            "wifi_rssi": st.rssi,
-            "paired_speakers": [p.get("name") for p in st.paired],
-            "paired_details": st.paired or None,
-            "multiroom_channel": st.channel,
-            "kleernet_paired": st.kleernet_paired,
-            "kleernet_partner_serial": st.kleernet_partner_serial,
-            "ddms_state": st.ddms_state,
-            "lr_reverse": st.lr_reverse,
-            "raw_source_index": st.source,
-        }
+        return {"raw_source_index": st.source if st else None}
 
     # -- commands ----------------------------------------------------------
     async def async_set_volume_level(self, volume: float) -> None:
@@ -238,7 +226,12 @@ class RevoxMediaPlayer(RevoxEntity, MediaPlayerEntity):
             command = client.select_source(SOURCE_COMMANDS[source])
         else:
             raise ServiceValidationError(
-                f"Unknown source {source!r}; choose one of {', '.join(SOURCE_LIST)}"
+                translation_domain=DOMAIN,
+                translation_key="unknown_source",
+                translation_placeholders={
+                    "source": source,
+                    "sources": ", ".join(SOURCE_LIST),
+                },
             )
         await self.coordinator.async_command(command)
         self._last_source = source
@@ -288,8 +281,10 @@ class RevoxMediaPlayer(RevoxEntity, MediaPlayerEntity):
             media_id = item.url
         media_id = async_process_play_media_url(self.hass, media_id)
         if not media_id.startswith(("http://", "https://")):
-            raise HomeAssistantError(
-                f"Only http(s) URLs can be played, got: {media_id}"
+            raise ServiceValidationError(
+                translation_domain=DOMAIN,
+                translation_key="unsupported_media_url",
+                translation_placeholders={"url": media_id},
             )
         await self.coordinator.async_command(self.coordinator.client.play_url(media_id))
 
